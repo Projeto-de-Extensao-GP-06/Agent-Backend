@@ -4,24 +4,27 @@ Backend para uma aplicacao baseada em agente de IA, com integracao ao Google Gem
 
 ## Status atual
 
-O agente e o fluxo de teste local pelo terminal ja estao configurados. A aplicacao FastAPI ainda nao possui endpoints nem o pipeline de services implementado. Os modulos de tools, memory e prompts tambem estao reservados para implementacao.
+O agente, o fluxo de teste local pelo terminal e a API FastAPI estao configurados. O endpoint de chat usa sessoes para preservar o contexto de cada conversa. Os modulos de tools, memory e prompts tambem estao reservados para implementacao.
 
 ## Estrutura do projeto
 
 ```text
 Agent-Backend/
 ├── app/
-│   ├── main.py                 # Instancia a aplicacao FastAPI e o agente
+│   ├── main.py                 # Instancia o FastAPI e registra os roteadores
 │   ├── agent/
 │   │   ├── agent.py            # Configura o modelo e cria o agente LangChain
 │   │   ├── memory.py           # Memoria e contexto das conversas (planejado)
 │   │   ├── prompts.py          # Prompts e instrucoes do agente (planejado)
 │   │   └── tools.py            # Tools disponiveis para o agente (planejado)
+│   ├── api/
+│   │   └── chat_router.py      # Endpoint HTTP de chat
 │   ├── config/
 │   │   └── settings.py         # Le e valida as variaveis de ambiente
 │   └── service/
-│       └── agent_service.py    # Pre e pos-processamento das requisicoes (planejado)
+│       └── agent_service.py    # Pre e pos-processamento das requisicoes
 ├── .env.example                # Exemplo de configuracao local
+├── .gitignore                  # Arquivos ignorados pelo Git
 ├── Dockerfile                  # Imagem para executar o backend
 ├── requirements.txt            # Dependencias Python
 └── run_local.py                # Cliente interativo para teste local
@@ -31,7 +34,7 @@ Agent-Backend/
 
 ### `app/main.py`
 
-Cria a instancia do FastAPI e inicializa o agente. Quando o fluxo HTTP estiver implementado, este modulo tambem devera registrar os endpoints da aplicacao.
+Cria a instancia do FastAPI e registra os endpoints da aplicacao.
 
 ### `app/agent/agent.py`
 
@@ -43,7 +46,7 @@ Define as configuracoes obrigatorias da aplicacao: `llm_api_key`, a chave de ace
 
 ### `app/service/agent_service.py`
 
-Modulo reservado para orquestrar o ciclo de uma requisicao. Ele devera concentrar o pre-processamento, validacoes, tratamento de erros, pos-processamento, formatacao e guardrails.
+Orquestra o ciclo de uma requisicao, invoca o agente com a sessao recebida e extrai a resposta textual para a API.
 
 ### `app/agent/tools.py`
 
@@ -113,13 +116,22 @@ Digite uma mensagem no prompt `User:`. Para encerrar, use `exit` ou `quit`. O cl
 
 ## Execucao da API
 
-O ponto de entrada da API e `app.main:app`. Quando os endpoints estiverem disponiveis, a aplicacao podera ser iniciada com:
+O ponto de entrada da API e `app.main:app`. Inicie a aplicacao com:
 
 ```powershell
 uvicorn app.main:app --reload
 ```
 
-No estado atual, o FastAPI apenas cria a aplicacao e inicializa o agente; ainda nao existe uma rota HTTP para receber mensagens.
+Envie mensagens para `POST /chat`:
+
+```json
+{
+	"message": "Qual e o status do processo?",
+	"session_id": "opcional-para-manter-o-contexto"
+}	
+```
+
+A resposta inclui o texto do assistente e o `session_id` a ser reutilizado nas proximas mensagens.
 
 ## Modelos disponíveis
 
