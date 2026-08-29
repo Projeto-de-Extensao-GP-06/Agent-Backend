@@ -35,6 +35,8 @@ async def enviar_mensagem(requisicao: ChatRequest) -> ChatResponse:
             mensagem=requisicao.message,
             id_sessao=str(id_sessao),
         )
+    except ValueError as excecao:
+        raise HTTPException(status_code=400, detail=str(excecao)) from excecao
     except Exception as excecao:
         raise HTTPException(
             status_code=502,
