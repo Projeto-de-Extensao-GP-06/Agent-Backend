@@ -2,4 +2,5 @@ langchain
 langchain-google-genai
 pydantic-settings
 fastapi
+uvicorn
 rich
