@@ -122,14 +122,12 @@ O ponto de entrada da API e `app.main:app`. Inicie a aplicacao com:
 uvicorn app.main:app --reload
 ```
 
-Envie mensagens para `POST /chat`:
+Envie mensagens para `POST /api/v1/chat`:
 
-```json
-{
-	"message": "Qual e o status do processo?",
-	"session_id": "opcional-para-manter-o-contexto"
-}	
-```
+    {
+      "message": "Qual e o status do processo?",
+      "session_id": "opcional-para-manter-o-contexto"
+    }
 
 A resposta inclui o texto do assistente e o `session_id` a ser reutilizado nas proximas mensagens.
 
