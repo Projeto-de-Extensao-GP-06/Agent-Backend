@@ -3,11 +3,63 @@ from typing import Any
 
 from langchain.messages import HumanMessage
 
-from app.agent.agent import criar_agente
+from app.agent.agent import criarAgente
+from app.agent.memory import delete_thread
 
-agent = criar_agente()
+agent = criarAgente()
 
-def _conteudo_para_texto(conteudo: Any) -> str:
+
+async def executarPipelineAgente(mensagem: str, idSessao: str, dadosProcesso: dict[str, Any] | None = None) -> dict[str, Any]:
+	mensagemNormalizada = mensagem.strip()
+	if not mensagemNormalizada:
+		raise ValueError("A mensagem nao pode estar vazia")
+
+	processoAnonimizado = transformarDadosProcessoIn(dadosProcesso)
+
+	agent_response = await agent.ainvoke(
+		{
+			"messages": [HumanMessage(content=mensagemNormalizada)],
+			"dados_processo": processoAnonimizado,
+		},
+		{"configurable": {"thread_id": idSessao}},
+	)
+
+	mensagens = agent_response.get("messages", [])
+	if not mensagens:
+		raise RuntimeError("O assistente nao retornou uma resposta")
+
+	message = conteudoParaTexto(mensagens[-1].content)
+
+	resposta = transformarDadosProcessoOut(message)
+
+	if not resposta:
+		raise RuntimeError("O assistente retornou uma resposta sem texto")
+
+	return {
+		"resposta": resposta,
+		"raw_response": agent_response,
+	}
+
+
+
+#TODO
+def transformarDadosProcessoIn(dadosProcesso: dict[str, Any] | None) -> dict[str, Any] | None:
+	if dadosProcesso is None:
+		return None
+
+	return dadosProcesso
+
+
+#TODO
+def transformarDadosProcessoOut(message: Any):
+	if message is None:
+		return None
+
+	return message
+
+
+
+def conteudoParaTexto(conteudo: Any) -> str:
 	if isinstance(conteudo, str):
 		return conteudo.strip()
 
@@ -25,22 +77,5 @@ def _conteudo_para_texto(conteudo: Any) -> str:
 	return ""
 
 
-async def executar_pipeline_agente(mensagem: str, id_sessao: str) -> str:
-	mensagem_normalizada = mensagem.strip()
-	if not mensagem_normalizada:
-		raise ValueError("A mensagem nao pode estar vazia")
-
-	resultado = await agent.ainvoke(
-		{"messages": [HumanMessage(content=mensagem_normalizada)]},
-		{"configurable": {"thread_id": id_sessao}},
-	)
-
-	mensagens = resultado.get("messages", [])
-	if not mensagens:
-		raise RuntimeError("O assistente nao retornou uma resposta")
-
-	resposta = _conteudo_para_texto(mensagens[-1].content)
-	if not resposta:
-		raise RuntimeError("O assistente retornou uma resposta sem texto")
-
-	return resposta
+def excluirSessao(idSessao: str):
+	return delete_thread(idSessao)
