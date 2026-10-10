@@ -17,25 +17,33 @@ A aplicação já conta com:
 
 ```text
 Agent-Backend/
-├── app/
-│   └── src/
+├── src/
+│   ├── main.py                    # entrypoint para execução do uvicorn
+│   └── app/
 │       ├── main.py                # inicializa o FastAPI e registra os roteadores
 │       ├── agent/
-│       │   ├── agent.py           # instancia LLM, memória e compila o agente via grafo
-│       │   ├── graph.py           # definição dos nós (agent, tools), arestas e compilação do StateGraph
+│       │   ├── __init__.py
+│       │   ├── agent.py           # instancia LLM e compila o agente via grafo
+│       │   ├── graph.py           # nós (agent, tools), arestas e StateGraph
 │       │   ├── graph_state.py     # definição do AgentState (mensagens, dados_processo, llm_calls)
-│       │   ├── memory.py          # gerenciamento e limpeza de threads no InMemorySaver
+│       │   ├── memory.py          # gerenciamento de memória (InMemorySaver) e limpeza de threads
 │       │   ├── prompts.py         # prompt do sistema da MarIA e regras de negócio
 │       │   └── tools.py           # ferramentas disponíveis para o agente
-│       ├── api/
-│       │   ├── routes/
-│       │   │   └── chat.py        # endpoints da API de chat
-│       │   └── schemas/
-│       │       └── chat.py        # request/response models da API
 │       ├── config/
+│       │   ├── __init__.py
 │       │   └── settings.py        # leitura das variáveis de ambiente com Pydantic
-│       └── service/
-│           └── agent_service.py   # orquestra a chamada ao agente e o processamento da resposta
+│       ├── entities/
+│       │   ├── __init__.py
+│       │   └── process.py         # entidades de domínio (processo, cliente, tribunal, etc.)
+│       ├── routes/
+│       │   ├── __init__.py
+│       │   └── chat.py            # endpoints da API de chat
+│       ├── schemas/
+│       │   ├── __init__.py
+│       │   └── chat.py            # contratos de request/response Pydantic da API
+│       └── services/
+│           ├── __init__.py
+│           └── agent_service.py   # orquestração de chamadas ao agente e fluxo de resposta
 ├── tests/
 │   ├── test_api_structure.py      # valida a estrutura da API
 │   ├── test_graph.py              # valida nós, estado e roteamento do grafo LangGraph
@@ -51,60 +59,54 @@ Agent-Backend/
 
 ## Responsabilidades dos módulos
 
-### `app/src/main.py`
-Cria a instância do FastAPI e inclui o router principal da API.
+### `src/app/main.py`
+Cria a instância do FastAPI, configura CORS e inclui os roteadores da API.
 
-### `app/src/api/routes/chat.py`
+### `src/app/routes/chat.py`
 Define os endpoints:
 - `POST /api/v1/chat`
 - `DELETE /api/v1/chat/{session_id}`
 
-### `app/src/api/schemas/chat.py`
-Define os contratos de entrada e saída:
-- `message`
-- `session_id`
-- `dados_processo`
-- `resumo_response`
-- `raw_response`
+### `src/app/schemas/chat.py`
+Define os contratos de entrada e saída (DTOs / Pydantic models):
+- `ChatRequest`
+- `ChatResponse`
+- `ResumoResponse`
+- `ChatDeleteResponse`
 
-### `app/src/service/agent_service.py`
+### `src/app/entities/process.py`
+Define as entidades de domínio relacionadas ao processo judicial (`ProcessoEntity`, `ClienteEntity`, `PrioridadeEntity`, `SiglaTribunalEntity`, `FaseProcessoEntity`).
+
+### `src/app/services/agent_service.py`
 Orquestra o fluxo completo do agente:
-1. valida a mensagem
-2. normaliza o payload
-3. envia `dados_processo` para o agente
-4. invoca o grafo com `HumanMessage`
-5. extrai o texto final da última mensagem
-6. retorna `resposta` e `raw_response`
+1. valida e normaliza a mensagem
+2. prepara o contexto do processo
+3. invoca o grafo com `HumanMessage`
+4. extrai a resposta gerada
+5. retorna `resposta` e `raw_response`
 
-### `app/src/agent/graph_state.py`
+### `src/app/agent/graph_state.py`
 Define o `AgentState` com:
 - `messages`: histórico de mensagens gerenciado com o redutor `add_messages`
 - `dados_processo`: dados do processo jurídico com redutor para persistência entre turnos
 - `llm_calls`: contador de execuções do modelo de linguagem
 
-### `app/src/agent/graph.py`
-Monta a arquitetura de grafo do LangGraph (`StateGraph`):
-- **Nós**:
-  - `agent`: injeta o system prompt e contexto do processo, invocando o modelo com as ferramentas
-  - `tools`: executa ferramentas solicitadas através do `ToolNode`
-- **Arestas**:
-  - `START -> agent`
-  - `agent -> conditional_edges`: se o LLM requisitou tools, vai para `tools`; caso contrário, finaliza em `END`
-  - `tools -> agent`: retorna a saída da ferramenta para que o modelo formule a resposta final
+### `src/app/agent/graph.py`
+Monta a arquitetura de grafo do LangGraph (`StateGraph`).
 
-### `app/src/agent/agent.py`
+### `src/app/agent/agent.py`
 Configura o cliente Gemini (`ChatGoogleGenerativeAI`), vincula as ferramentas de `tools.py` e compila o grafo com `InMemorySaver`.
 
-### `app/src/agent/memory.py`
-Registra threads e remove o histórico persistido daquele `session_id`, limpando a sessão no checkpointer do LangGraph.
+### `src/app/agent/memory.py`
+Gerencia a instância de `InMemorySaver` e a remoção de sessões/threads (`delete_thread`).
 
-### `app/src/agent/tools.py`
+### `src/app/agent/tools.py`
 Define ferramentas acessíveis ao agente.
 
-### `app/src/agent/prompts.py`
-Centraliza o prompt do sistema e as instruções de comportamento do agente.
+### `src/app/agent/prompts.py`
+Centraliza o prompt do sistema e as diretrizes da assistente MarIA.
 
-### `app/src/config/settings.py`
+### `src/app/config/settings.py`
 Carrega as variáveis de ambiente do projeto com `pydantic-settings`.
 
 ## Requisitos
@@ -157,7 +159,10 @@ Esse cliente envia mensagem por mensagem para a service do agente e é útil par
 ### API FastAPI
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn src.app.main:app --reload
+
+# Para permitir conexão externa
+uvicorn src.app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 A API fica disponível em:
@@ -279,10 +284,10 @@ Cliente / curl / browser
 FastAPI
         |
         v
-app.api.routes.chat
+src.app.routes.chat
         |
         v
-app.service.agent_service
+src.app.services.agent_service
         |
         v
 LangChain + Gemini Agent

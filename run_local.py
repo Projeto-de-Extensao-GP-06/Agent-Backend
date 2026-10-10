@@ -22,7 +22,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from app.src.service.agent_service import excluirSessao, executarPipelineAgente
+from src.app.services.agent_service import excluirSessao, executarPipelineAgente
 
 console = Console()
 

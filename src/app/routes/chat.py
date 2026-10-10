@@ -3,9 +3,8 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException
 
-from app.src.agent.memory import delete_thread
-from app.src.api.schemas.chat import ChatDeleteResponse, ChatRequest, ChatResponse
-from app.src.service.agent_service import excluirSessao, executarPipelineAgente
+from src.app.schemas.chat import ChatDeleteResponse, ChatRequest, ChatResponse
+from src.app.services.agent_service import excluirSessao, executarPipelineAgente
 
 logger = logging.getLogger(__name__)
 
@@ -49,3 +48,6 @@ async def excluirChat(session_id: str) -> ChatDeleteResponse:
         message="Chat excluído com sucesso",
         session_id=session_id,
     )
+
+
+__all__ = ["router", "enviarMensagem", "excluirChat"]

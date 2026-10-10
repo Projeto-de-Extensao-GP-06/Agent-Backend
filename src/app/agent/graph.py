@@ -6,11 +6,11 @@ from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
-from app.src.agent.graph_state import AgentState
-from app.src.agent.prompts import SYSTEM_PROMPT
+from src.app.agent.graph_state import AgentState
+from src.app.agent.prompts import SYSTEM_PROMPT
 
 
-def build_mesage(state: AgentState) -> list[BaseMessage]:
+def build_message(state: AgentState) -> list[BaseMessage]:
     """
     Prepara a lista de mensagens a ser enviada ao modelo,
     injetando o SYSTEM_PROMPT e as informações contextuais de 'dados_processo', se existirem.
@@ -36,32 +36,23 @@ def build_mesage(state: AgentState) -> list[BaseMessage]:
     return [SystemMessage(content=instrucoes)] + mensagens
 
 
-# Aliases para compatibilidade
-build_message = build_mesage
-montar_mensagens_modelo = build_mesage
-
-
 
 def create_agent_node(model_with_tools: Any) -> RunnableLambda:
     """
     Cria o nó 'agent' responsável por invocar o LLM com suporte tanto síncrono quanto assíncrono.
     """
     def _agent_sync(state: AgentState) -> dict[str, Any]:
-        mensagens_para_modelo = build_mesage(state)
+        mensagens_para_modelo = build_message(state)
         resposta = model_with_tools.invoke(mensagens_para_modelo)
-        chamadas = state.get("llm_calls", 0) + 1
         return {
             "messages": [resposta],
-            "llm_calls": chamadas,
         }
 
     async def _agent_async(state: AgentState) -> dict[str, Any]:
-        mensagens_para_modelo = build_mesage(state)
+        mensagens_para_modelo = build_message(state)
         resposta = await model_with_tools.ainvoke(mensagens_para_modelo)
-        chamadas = state.get("llm_calls", 0) + 1
         return {
             "messages": [resposta],
-            "llm_calls": chamadas,
         }
 
     return RunnableLambda(_agent_sync, afunc=_agent_async)
@@ -101,7 +92,7 @@ def criarGrafoAgente(model: Any, tools: list[Any], checkpointer: Any = None):
             - Caso contrário -> END
         - 'tools' -> 'agent' (retorna o resultado da ferramenta para o LLM gerar a resposta final)
     """
-    model_with_tools = model.bind_tools(tools) if tools else model
+    model_with_tools = model.bind_tools(tools)
 
     workflow = StateGraph(AgentState)
 

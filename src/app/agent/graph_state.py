@@ -29,7 +29,7 @@ class AgentState(TypedDict, total=False):
     """
     messages: Annotated[list[BaseMessage], add_messages]
     dados_processo: Annotated[dict[str, Any] | None, _atualizar_dados_processo]
-    llm_calls: int
+    
 
 
 # Alias para retrocompatibilidade com referências a MessagesState

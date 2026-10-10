@@ -1,12 +1,10 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.checkpoint.memory import InMemorySaver
 
-from app.src.agent.graph import criarGrafoAgente
-from app.src.agent.graph_state import AgentState, MessagesState
-from app.src.agent.tools import testeTool
-from app.src.config.settings import settings
-
-memory_store = InMemorySaver()
+from src.app.agent.graph import criarGrafoAgente
+from src.app.agent.graph_state import AgentState, MessagesState
+from src.app.agent.memory import memory_store
+from src.app.agent.tools import testeTool
+from src.app.config.settings import settings
 
 
 def criarAgente():

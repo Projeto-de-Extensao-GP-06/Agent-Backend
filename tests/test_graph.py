@@ -7,10 +7,10 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END
 
-from app.src.agent.graph import criarGrafoAgente, montar_mensagens_modelo, should_continue
-from app.src.agent.graph_state import AgentState, _atualizar_dados_processo
-from app.src.agent.memory import delete_thread
-from app.src.agent.tools import testeTool
+from src.app.agent.graph import criarGrafoAgente, montar_mensagens_modelo, should_continue
+from src.app.agent.graph_state import AgentState, _atualizar_dados_processo
+from src.app.agent.memory import delete_thread
+from src.app.agent.tools import testeTool
 
 
 class GraphTests(unittest.TestCase):

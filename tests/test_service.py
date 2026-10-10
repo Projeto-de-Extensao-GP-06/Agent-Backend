@@ -6,9 +6,9 @@ from langchain_core.messages import AIMessage
 
 
 class ServiceTests(unittest.TestCase):
-    @patch("app.src.service.agent_service.agent")
+    @patch("src.app.services.agent_service.agent")
     def test_executar_pipeline_agente_sucesso(self, mock_agent):
-        from app.src.service.agent_service import executarPipelineAgente
+        from src.app.services.agent_service import executarPipelineAgente
 
         mock_agent.ainvoke = AsyncMock(
             return_value={
@@ -30,7 +30,7 @@ class ServiceTests(unittest.TestCase):
         asyncio.run(_run())
 
     def test_executar_pipeline_agente_mensagem_vazia_lanca_erro(self):
-        from app.src.service.agent_service import executarPipelineAgente
+        from src.app.services.agent_service import executarPipelineAgente
 
         async def _run():
             with self.assertRaises(ValueError):
