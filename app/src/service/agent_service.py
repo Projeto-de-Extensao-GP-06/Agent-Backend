@@ -3,8 +3,8 @@ from typing import Any
 
 from langchain.messages import HumanMessage
 
-from app.agent.agent import criarAgente
-from app.agent.memory import delete_thread
+from app.src.agent.agent import criarAgente
+from app.src.agent.memory import delete_thread
 
 agent = criarAgente()
 

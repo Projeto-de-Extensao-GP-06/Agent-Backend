@@ -1,6 +1,6 @@
 from langchain_core.runnables import RunnableConfig
 
-from app.agent.agent import memory_store
+from app.src.agent.agent import memory_store
 
 
 def delete_thread(thread_id: str) -> bool:
@@ -12,7 +12,8 @@ def delete_thread(thread_id: str) -> bool:
 
     try:
         memory_store.delete_thread(thread_id)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Erro ao deletar thread {thread_id}: {e}")
+        return False
 
     return True
