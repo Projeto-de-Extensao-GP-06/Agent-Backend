@@ -31,3 +31,11 @@ class ChatResponse(BaseModel):
 class ChatDeleteResponse(BaseModel):
     message: str
     session_id: str | UUID
+
+
+__all__ = [
+    "ChatRequest",
+    "ResumoResponse",
+    "ChatResponse",
+    "ChatDeleteResponse",
+]

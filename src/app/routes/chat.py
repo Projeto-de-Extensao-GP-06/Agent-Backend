@@ -1,10 +1,12 @@
+import logging
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException
 
-from app.agent.memory import delete_thread
-from app.api.schemas.chat import ChatDeleteResponse, ChatRequest, ChatResponse
-from app.service.agent_service import executarPipelineAgente, excluirSessao
+from src.app.schemas.chat import ChatDeleteResponse, ChatRequest, ChatResponse
+from src.app.services.agent_service import excluirSessao, executarPipelineAgente
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["chat"])
 
@@ -22,9 +24,10 @@ async def enviarMensagem(requisicao: ChatRequest) -> ChatResponse:
     except ValueError as excecao:
         raise HTTPException(status_code=400, detail=str(excecao)) from excecao
     except Exception as excecao:
+        logger.exception("Erro ao processar mensagem no assistente")
         raise HTTPException(
             status_code=502,
-            detail="Falha na comunicacao com o assistente",
+            detail=f"Falha na comunicacao com o assistente: {excecao}",
         ) from excecao
 
     return ChatResponse(
@@ -45,3 +48,6 @@ async def excluirChat(session_id: str) -> ChatDeleteResponse:
         message="Chat excluído com sucesso",
         session_id=session_id,
     )
+
+
+__all__ = ["router", "enviarMensagem", "excluirChat"]

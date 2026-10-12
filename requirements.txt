@@ -1,5 +1,6 @@
 langchain
 langchain-google-genai
+langgraph
 pydantic-settings
 fastapi
 uvicorn
