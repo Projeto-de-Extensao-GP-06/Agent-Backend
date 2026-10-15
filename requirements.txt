@@ -5,3 +5,5 @@ pydantic-settings
 fastapi
 uvicorn
 rich
+presidio-analyzer
+presidio-anonymizer

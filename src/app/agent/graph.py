@@ -36,6 +36,10 @@ def build_message(state: AgentState) -> list[BaseMessage]:
     return [SystemMessage(content=instrucoes)] + mensagens
 
 
+# Alias para compatibilidade com testes existentes
+montar_mensagens_modelo = build_message
+
+
 
 def create_agent_node(model_with_tools: Any) -> RunnableLambda:
     """
@@ -44,15 +48,19 @@ def create_agent_node(model_with_tools: Any) -> RunnableLambda:
     def _agent_sync(state: AgentState) -> dict[str, Any]:
         mensagens_para_modelo = build_message(state)
         resposta = model_with_tools.invoke(mensagens_para_modelo)
+        chamadas = state.get("llm_calls") or 0
         return {
             "messages": [resposta],
+            "llm_calls": chamadas + 1,
         }
 
     async def _agent_async(state: AgentState) -> dict[str, Any]:
         mensagens_para_modelo = build_message(state)
         resposta = await model_with_tools.ainvoke(mensagens_para_modelo)
+        chamadas = state.get("llm_calls") or 0
         return {
             "messages": [resposta],
+            "llm_calls": chamadas + 1,
         }
 
     return RunnableLambda(_agent_sync, afunc=_agent_async)

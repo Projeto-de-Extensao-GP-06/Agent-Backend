@@ -5,6 +5,10 @@ from langchain.messages import HumanMessage
 
 from src.app.agent.agent import criarAgente
 from src.app.agent.memory import delete_thread
+from src.app.services.anonymizer import (
+    anonimizar_dados_processo,
+    desanonimizar_texto,
+)
 
 agent = criarAgente()
 
@@ -44,21 +48,20 @@ async def executarPipelineAgente(
         "raw_response": agent_response,
     }
 
-
-# TODO
 def transformarDadosProcessoIn(dadosProcesso: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Anonimiza os dados sensíveis do processo antes do envio ao agente/LLM."""
     if dadosProcesso is None:
         return None
 
-    return dadosProcesso
+    return anonimizar_dados_processo(dadosProcesso)
 
 
-# TODO
-def transformarDadosProcessoOut(message: Any):
-    if message is None:
-        return None
+def transformarDadosProcessoOut(message: Any) -> Any:
+    """Restaura dados sensíveis criptografados presentes na resposta do agente/LLM."""
+    if not isinstance(message, str):
+        return message
 
-    return message
+    return desanonimizar_texto(message)
 
 
 def conteudoParaTexto(conteudo: Any) -> str:
