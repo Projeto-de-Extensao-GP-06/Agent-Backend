@@ -26,34 +26,36 @@ def _init_engines() -> tuple[AnalyzerEngine, AnonymizerEngine, DeanonymizeEngine
     if _analyzer is not None and _anonymizer is not None and _deanonymizer is not None:
         return _analyzer, _anonymizer, _deanonymizer
 
-    # Configuração do spaCy para suportar português e inglês
+    # Configuração do spaCy para suportar português
     nlp_configuration = {
         "nlp_engine_name": "spacy",
         "models": [
             {"lang_code": "pt", "model_name": "pt_core_news_sm"},
-            {"lang_code": "en", "model_name": "en_core_web_lg"},
         ],
     }
 
     try:
         provider = NlpEngineProvider(nlp_configuration=nlp_configuration)
         nlp_engine = provider.create_engine()
-        analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=["pt", "en"])
+        analyzer = AnalyzerEngine(nlp_engine=nlp_engine, supported_languages=["pt"])
     except Exception as e:
         logger.warning(
-            "Falha ao carregar modelos spaCy multilíngues (%s). Usando configuração padrão do AnalyzerEngine.",
+            "Falha ao carregar modelo spaCy em português (%s). Usando configuração padrão do AnalyzerEngine.",
             e,
         )
         analyzer = AnalyzerEngine()
 
-    # Registro dos reconhecedores personalizados para 'pt' e 'en'
-    for lang in ["pt", "en"]:
-        analyzer.registry.add_recognizer(CpfRecognizer(supported_language=lang))
-        analyzer.registry.add_recognizer(CnpjRecognizer(supported_language=lang))
-        analyzer.registry.add_recognizer(RgRecognizer(supported_language=lang))
-        analyzer.registry.add_recognizer(BrazilPhoneRecognizer(supported_language=lang))
-        analyzer.registry.add_recognizer(RazaoSocialRecognizer(supported_language=lang))
-        analyzer.registry.add_recognizer(CnjRecognizer(supported_language=lang))
+    # Registro dos reconhecedores personalizados para 'pt'
+    recognizers = [
+        CpfRecognizer,
+        CnpjRecognizer,
+        RgRecognizer,
+        BrazilPhoneRecognizer,
+        RazaoSocialRecognizer,
+        CnjRecognizer,
+    ]
+    for recognizer_cls in recognizers:
+        analyzer.registry.add_recognizer(recognizer_cls(supported_language="pt"))
 
     anonymizer = AnonymizerEngine()
     deanonymizer = DeanonymizeEngine()

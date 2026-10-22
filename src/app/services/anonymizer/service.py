@@ -33,8 +33,8 @@ def anonimizar_texto(texto: str, key: str | None = None) -> tuple[str, list[dict
     try:
         results = analyzer.analyze(text=texto, language="pt")
     except Exception as e:
-        logger.warning("Falha ao analisar texto no idioma 'pt': %s. Tentando 'en'.", e)
-        results = analyzer.analyze(text=texto, language="en")
+        logger.warning("Falha ao analisar texto no idioma 'pt': %s", e)
+        results = []
 
     if not results:
         return texto, []

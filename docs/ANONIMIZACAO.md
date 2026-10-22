@@ -189,9 +189,9 @@ Implementa o padrão **Singleton com Carregamento Preguiçoso (Lazy Loading)** p
 ### Funções:
 
 - **`_init_engines()`**:
-  - Configura o `NlpEngineProvider` do Presidio para carregar os modelos spaCy em português (`pt_core_news_sm`) e inglês (`en_core_web_lg`).
-  - Cria a instância de `AnalyzerEngine(nlp_engine=..., supported_languages=["pt", "en"])`.
-  - Registra os 6 reconhecedores personalizados no `analyzer.registry` para ambos os idiomas.
+  - Configura o `NlpEngineProvider` do Presidio para carregar o modelo spaCy em português (`pt_core_news_sm`).
+  - Cria a instância de `AnalyzerEngine(nlp_engine=..., supported_languages=["pt"])`.
+  - Registra os 6 reconhecedores personalizados no `analyzer.registry` para o idioma português.
   - Instancia `AnonymizerEngine()` e `DeanonymizeEngine()`.
   - Armazena as instâncias em variáveis globais de módulo (`_analyzer`, `_anonymizer`, `_deanonymizer`).
 - **`get_analyzer_engine()`**: Retorna a instância única do analisador de texto.
