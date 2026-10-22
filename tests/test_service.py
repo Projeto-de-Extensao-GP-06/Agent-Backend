@@ -26,6 +26,9 @@ class ServiceTests(unittest.TestCase):
             )
             self.assertEqual(resultado["resposta"], "Olá, posso ajudar!")
             self.assertIn("raw_response", resultado)
+            self.assertIn("debug_info", resultado)
+            self.assertEqual(resultado["debug_info"]["retorno_modelo"], "Olá, posso ajudar!")
+            self.assertEqual(resultado["debug_info"]["pos_desanonimizacao"], "Olá, posso ajudar!")
 
         asyncio.run(_run())
 

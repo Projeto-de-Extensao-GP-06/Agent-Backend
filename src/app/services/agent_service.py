@@ -46,6 +46,14 @@ async def executarPipelineAgente(
     return {
         "resposta": resposta,
         "raw_response": agent_response,
+        "debug_info": {
+            "dados_processo_original": dadosProcesso,
+            "dados_processo_anonimizado": processo or agent_response.get("dados_processo"),
+            "retorno_modelo": message,
+            "pos_desanonimizacao": resposta,
+            "llm_calls": agent_response.get("llm_calls", 1),
+            "mensagens": mensagens,
+        },
     }
 
 def transformarDadosProcessoIn(dadosProcesso: dict[str, Any] | None) -> dict[str, Any] | None:
