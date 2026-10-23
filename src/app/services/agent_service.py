@@ -7,6 +7,7 @@ from src.app.agent.agent import criarAgente
 from src.app.agent.memory import delete_thread
 from src.app.services.anonymizer import (
     anonimizar_dados_processo,
+    anonimizar_texto,
     desanonimizar_texto,
 )
 
@@ -23,10 +24,11 @@ async def executarPipelineAgente(
         raise ValueError("A mensagem nao pode estar vazia")
 
     processo = transformarDadosProcessoIn(dadosProcesso) if dadosProcesso != None else None
+    mensagemAnonimizada = transformarMensagemIn(mensagemNormalizada)
 
     agent_response = await agent.ainvoke(
         {
-            "messages": [HumanMessage(content=mensagemNormalizada)],
+            "messages": [HumanMessage(content=mensagemAnonimizada)],
             "dados_processo": processo,
         },
         {"configurable": {"thread_id": idSessao}},
@@ -47,6 +49,8 @@ async def executarPipelineAgente(
         "resposta": resposta,
         "raw_response": agent_response,
         "debug_info": {
+            "mensagem_original": mensagemNormalizada,
+            "mensagem_anonimizada": mensagemAnonimizada,
             "dados_processo_original": dadosProcesso,
             "dados_processo_anonimizado": processo or agent_response.get("dados_processo"),
             "retorno_modelo": message,
@@ -55,6 +59,15 @@ async def executarPipelineAgente(
             "mensagens": mensagens,
         },
     }
+
+
+def transformarMensagemIn(mensagem: str) -> str:
+    """Anonimiza os dados sensíveis do texto enviado pelo usuário antes do envio ao agente/LLM."""
+    if not mensagem or not isinstance(mensagem, str):
+        return mensagem
+
+    texto_anonimizado, _ = anonimizar_texto(mensagem)
+    return texto_anonimizado
 
 def transformarDadosProcessoIn(dadosProcesso: dict[str, Any] | None) -> dict[str, Any] | None:
     """Anonimiza os dados sensíveis do processo antes do envio ao agente/LLM."""
@@ -97,6 +110,7 @@ def excluirSessao(idSessao: str) -> bool:
 __all__ = [
     "agent",
     "executarPipelineAgente",
+    "transformarMensagemIn",
     "transformarDadosProcessoIn",
     "transformarDadosProcessoOut",
     "conteudoParaTexto",

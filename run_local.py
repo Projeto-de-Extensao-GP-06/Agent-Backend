@@ -81,19 +81,37 @@ def exibir_painel_debug(resultado: dict[str, Any]) -> None:
     console.rule("[bold magenta]PAINEL DE DEBUG DO AGENTE[/bold magenta]")
 
     # 1. Pós-Anonimização (Dados enviados ao modelo com PII mascarado)
-    dados_anonimizados = debug_info.get("dados_processo_anonimizado")
-    if dados_anonimizados:
+    mensagem_anonimizada = debug_info.get("mensagem_anonimizada")
+    mensagem_original = debug_info.get("mensagem_original")
+    teve_pii_mensagem = bool(mensagem_anonimizada and mensagem_anonimizada != mensagem_original)
+
+    if teve_pii_mensagem:
         console.print(
             Panel(
-                JSON.from_data(dados_anonimizados),
-                title="[bold cyan]1. Pós-Anonimização (dados_processo com PII criptografado via AES)[/bold cyan]",
+                str(mensagem_anonimizada),
+                title="[bold cyan]1.1. Pós-Anonimização da Mensagem (PII criptografado via AES)[/bold cyan]",
                 border_style="cyan",
             )
         )
-    else:
+
+    dados_anonimizados = debug_info.get("dados_processo_anonimizado")
+    if dados_anonimizados:
+        titulo_processo = (
+            "[bold cyan]1.2. Pós-Anonimização (dados_processo com PII criptografado via AES)[/bold cyan]"
+            if teve_pii_mensagem
+            else "[bold cyan]1. Pós-Anonimização (dados_processo com PII criptografado via AES)[/bold cyan]"
+        )
         console.print(
             Panel(
-                "[dim italic]Nenhum dado de processo ativo nesta requisição.[/dim italic]",
+                JSON.from_data(dados_anonimizados),
+                title=titulo_processo,
+                border_style="cyan",
+            )
+        )
+    elif not teve_pii_mensagem:
+        console.print(
+            Panel(
+                "[dim italic]Nenhum dado sensível mascarado e nenhum dado de processo ativo nesta requisição.[/dim italic]",
                 title="[bold cyan]1. Pós-Anonimização[/bold cyan]",
                 border_style="cyan",
             )

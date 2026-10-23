@@ -3,6 +3,7 @@ import unittest
 from src.app.services.agent_service import (
     transformarDadosProcessoIn,
     transformarDadosProcessoOut,
+    transformarMensagemIn,
 )
 from src.app.services.anonymizer import (
     anonimizar_dados_processo,
@@ -145,6 +146,64 @@ class AnonymizerTests(unittest.TestCase):
             resposta_final,
             "O processo referente ao CPF 347.144.900-01 foi deferido com sucesso.",
         )
+
+    def test_transformar_mensagem_in_e_dados_processo_combinados(self):
+        mensagem_usuario = "Meu CPF é 347.144.900-01 e telefone (11) 90303-0303."
+        dados_processo = {
+            "reclamado": "Silva & Souza Transportes Ltda",
+            "processo": "0000001-84.2020.8.26.0001",
+        }
+
+        msg_anonimizada = transformarMensagemIn(mensagem_usuario)
+        proc_anonimizado = transformarDadosProcessoIn(dados_processo)
+
+        # Mensagem do usuário foi devidamente anonimizada
+        self.assertNotIn("347.144.900-01", msg_anonimizada)
+        self.assertNotIn("(11) 90303-0303", msg_anonimizada)
+
+        # Dicionário do processo foi devidamente anonimizado
+        self.assertNotIn("Silva & Souza Transportes Ltda", proc_anonimizado["reclamado"])
+        self.assertNotIn("0000001-84.2020.8.26.0001", proc_anonimizado["processo"])
+
+        # LLM responde citando os tokens cifrados de ambos
+        resposta_simulada = (
+            f"Confirmado para o titular do documento e telefone. "
+            f"Processo {proc_anonimizado['processo']} contra {proc_anonimizado['reclamado']}."
+        )
+        resposta_restaurada = transformarDadosProcessoOut(resposta_simulada)
+
+        self.assertIn("0000001-84.2020.8.26.0001", resposta_restaurada)
+        self.assertIn("Silva & Souza Transportes Ltda", resposta_restaurada)
+
+    def test_deny_list_ignora_verbos_e_comandos_no_inicio_de_frase(self):
+        # Garante que 'Retorne' e outros comandos usuais NÃO sejam criptografados
+        frases_comandos = [
+            "Retorne os dados do processo.",
+            "Retorne por favor.",
+            "Retorne.",
+            "Faça a consulta do processo.",
+            "Envie o relatório por email.",
+            "Busque as informações.",
+            "Atualize o status da causa.",
+            "Cancele a audiência.",
+            "Quero saber o andamento.",
+        ]
+
+        for frase in frases_comandos:
+            anonimizado, itens = anonimizar_texto(frase)
+            self.assertEqual(
+                anonimizado,
+                frase,
+                f"A frase '{frase}' teve termos criptografados indevidamente: {anonimizado}",
+            )
+            self.assertEqual(len(itens), 0)
+
+        # Garante que com PII na mesma frase, o comando é preservado e o PII é cifrado
+        frase_mista = "Retorne os dados do CPF 347.144.900-01, por favor."
+        anonimizado_misto, _ = anonimizar_texto(frase_mista)
+        self.assertTrue(anonimizado_misto.startswith("Retorne os dados do CPF "))
+        self.assertNotIn("347.144.900-01", anonimizado_misto)
+        self.assertTrue(anonimizado_misto.endswith(", por favor."))
 
 
 if __name__ == "__main__":
