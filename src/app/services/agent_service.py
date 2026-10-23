@@ -5,6 +5,11 @@ from langchain.messages import HumanMessage
 
 from src.app.agent.agent import criarAgente
 from src.app.agent.memory import delete_thread
+from src.app.services.anonymizer import (
+    anonimizar_dados_processo,
+    anonimizar_texto,
+    desanonimizar_texto,
+)
 
 agent = criarAgente()
 
@@ -19,10 +24,11 @@ async def executarPipelineAgente(
         raise ValueError("A mensagem nao pode estar vazia")
 
     processo = transformarDadosProcessoIn(dadosProcesso) if dadosProcesso != None else None
+    mensagemAnonimizada = transformarMensagemIn(mensagemNormalizada)
 
     agent_response = await agent.ainvoke(
         {
-            "messages": [HumanMessage(content=mensagemNormalizada)],
+            "messages": [HumanMessage(content=mensagemAnonimizada)],
             "dados_processo": processo,
         },
         {"configurable": {"thread_id": idSessao}},
@@ -42,23 +48,41 @@ async def executarPipelineAgente(
     return {
         "resposta": resposta,
         "raw_response": agent_response,
+        "debug_info": {
+            "mensagem_original": mensagemNormalizada,
+            "mensagem_anonimizada": mensagemAnonimizada,
+            "dados_processo_original": dadosProcesso,
+            "dados_processo_anonimizado": processo or agent_response.get("dados_processo"),
+            "retorno_modelo": message,
+            "pos_desanonimizacao": resposta,
+            "llm_calls": agent_response.get("llm_calls", 1),
+            "mensagens": mensagens,
+        },
     }
 
 
-# TODO
+def transformarMensagemIn(mensagem: str) -> str:
+    """Anonimiza os dados sensíveis do texto enviado pelo usuário antes do envio ao agente/LLM."""
+    if not mensagem or not isinstance(mensagem, str):
+        return mensagem
+
+    texto_anonimizado, _ = anonimizar_texto(mensagem)
+    return texto_anonimizado
+
 def transformarDadosProcessoIn(dadosProcesso: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Anonimiza os dados sensíveis do processo antes do envio ao agente/LLM."""
     if dadosProcesso is None:
         return None
 
-    return dadosProcesso
+    return anonimizar_dados_processo(dadosProcesso)
 
 
-# TODO
-def transformarDadosProcessoOut(message: Any):
-    if message is None:
-        return None
+def transformarDadosProcessoOut(message: Any) -> Any:
+    """Restaura dados sensíveis criptografados presentes na resposta do agente/LLM."""
+    if not isinstance(message, str):
+        return message
 
-    return message
+    return desanonimizar_texto(message)
 
 
 def conteudoParaTexto(conteudo: Any) -> str:
@@ -86,6 +110,7 @@ def excluirSessao(idSessao: str) -> bool:
 __all__ = [
     "agent",
     "executarPipelineAgente",
+    "transformarMensagemIn",
     "transformarDadosProcessoIn",
     "transformarDadosProcessoOut",
     "conteudoParaTexto",
