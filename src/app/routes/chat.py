@@ -1,10 +1,11 @@
 import logging
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from src.app.schemas.chat import ChatDeleteResponse, ChatRequest, ChatResponse
 from src.app.services.agent_service import excluirSessao, executarPipelineAgente
+from src.app.security.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +13,15 @@ router = APIRouter(prefix="/api/v1", tags=["chat"])
 
 
 @router.post("/chat", response_model=ChatResponse, status_code=200)
-async def enviarMensagem(requisicao: ChatRequest) -> ChatResponse:
+async def enviarMensagem(
+    requisicao: ChatRequest,
+    current_user: str = Depends(get_current_user)
+) -> ChatResponse:
+    """
+    Endpoint para enviar mensagem ao assistente.
+
+    Requer autenticação JWT via header Authorization: Bearer <token>
+    """
     idSessao: str | UUID = requisicao.session_id or str(uuid4())
 
     try:
@@ -40,7 +49,15 @@ async def enviarMensagem(requisicao: ChatRequest) -> ChatResponse:
 
 
 @router.delete("/chat/{session_id}", response_model=ChatDeleteResponse, status_code=200)
-async def excluirChat(session_id: str) -> ChatDeleteResponse:
+async def excluirChat(
+    session_id: str,
+    current_user: str = Depends(get_current_user)
+) -> ChatDeleteResponse:
+    """
+    Endpoint para excluir uma sessão de chat.
+
+    Requer autenticação JWT via header Authorization: Bearer <token>
+    """
     if not excluirSessao(session_id):
         raise HTTPException(status_code=404, detail="Thread nao encontrada")
 
