@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from src.app.config.settings import settings
 from src.app.security.jwt_manager import jwt_manager
 from src.app.security.auth import get_current_user, require_general_use
 from src.app.security.token_blacklist import token_blacklist
@@ -41,7 +42,7 @@ async def validate_token(current_user: str = Depends(get_current_user)) -> Token
 
 
 @router.get("/me")
-async def get_me(current_user: str = Depends(require_general_use())) -> dict:
+async def get_me(current_user: str = Depends(require_general_use)) -> dict:
     """
     Retorna informações do usuário autenticado.
 
@@ -57,8 +58,7 @@ async def get_me(current_user: str = Depends(require_general_use())) -> dict:
 @router.post("/logout")
 async def logout(
     request: Request,
-    response: Response,
-    current_user: str = Depends(get_current_user)
+    response: Response
 ) -> JSONResponse:
     """
     Faz logout do usuário.
@@ -67,6 +67,8 @@ async def logout(
     remove os cookies de autenticação.
 
     Similar ao endpoint /auth/logout do Backend Java.
+    Este endpoint é público (não exige autenticação) porque
+    o token pode estar expirado ou inválido.
     """
     token = get_token_from_request(request)
 
@@ -78,7 +80,7 @@ async def logout(
         key="authToken",
         path="/",
         httponly=True,
-        secure=True,
+        secure=settings.cookie_secure,
         samesite="strict"
     )
 
@@ -86,7 +88,7 @@ async def logout(
         key="refreshToken",
         path="/auth",
         httponly=True,
-        secure=True,
+        secure=settings.cookie_secure,
         samesite="strict"
     )
 

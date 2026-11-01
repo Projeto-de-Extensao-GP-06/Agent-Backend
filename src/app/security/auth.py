@@ -6,7 +6,6 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.app.security.jwt_manager import jwt_manager
 from src.app.security.token_blacklist import token_blacklist
 from src.app.security.middleware import get_token_from_request
-from src.app.security.exceptions import TokenBlacklistedException, AuthenticationException
 
 
 security = HTTPBearer(auto_error=False)
@@ -102,20 +101,29 @@ async def get_current_user_optional(
     return payload.get("sub")
 
 
-async def require_scope(required_scope: str):
+class RequireScope:
     """
-    Factory para criar dependência que verifica o escopo do token.
+    Callable para verificar escopo do token com FastAPI Depends.
 
-    Args:
-        required_scope: Escopo necessário (ex: "GENERAL_USE", "SET_PASSWORD")
-
-    Returns:
-        Função de dependência para FastAPI
+    Equivalente ao @PreAuthorize do Spring Security.
     """
-    async def check_scope(
-        request: Request,
-        email: str = Depends(get_current_user)
-    ) -> str:
+
+    def __init__(self, required_scope: str):
+        self.required_scope = required_scope
+
+    async def __call__(self, request: Request) -> str:
+        """
+        Verifica o escopo do token.
+
+        Args:
+            request: Objeto de requisição FastAPI
+
+        Returns:
+            Email do usuário autenticado
+
+        Raises:
+            HTTPException: Se o escopo não corresponder
+        """
         token = get_token_from_request(request)
         if not token:
             raise HTTPException(
@@ -131,31 +139,23 @@ async def require_scope(required_scope: str):
             )
 
         scope = payload.get("scope")
-        if scope != required_scope:
+        if scope != self.required_scope:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Escopo '{required_scope}' necessário para esta operação",
+                detail=f"Escopo '{self.required_scope}' necessário para esta operação",
+            )
+
+        email = payload.get("sub")
+        if email is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token não contém usuário válido",
             )
 
         return email
 
-    return check_scope
 
-
-def require_general_use():
-    """
-    Dependência que exige escopo GENERAL_USE no token.
-
-    Equivalente ao @PreAuthorize("hasAuthority('SCOPE_GENERAL_USE')") do Spring Security.
-    """
-    return require_scope("GENERAL_USE")
-
-
-def require_set_password():
-    """
-    Dependência que exige escopo SET_PASSWORD no token.
-
-    Equivalente ao @PreAuthorize("hasAuthority('SCOPE_SET_PASSWORD')") do Spring Security.
-    """
-    return require_scope("SET_PASSWORD")
+# Instâncias callable para uso com Depends()
+require_general_use = RequireScope("GENERAL_USE")
+require_set_password = RequireScope("SET_PASSWORD")
 

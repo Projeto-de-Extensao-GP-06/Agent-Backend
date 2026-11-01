@@ -4,6 +4,44 @@
 
 Este documento descreve as camadas de segurança implementadas no Agent Backend (Python/FastAPI) para igualar o nível de segurança do Backend Java (Spring Boot).
 
+## ✅ Correções Feitas
+
+### 1. Correção do `require_general_use` e `require_set_password`
+**Problema**: Usavam factory pattern que não funcionava corretamente com `Depends()`.
+
+**Solução**: Implementado como callable class `RequireScope` que pode ser usado diretamente com `Depends()`:
+```python
+require_general_use = RequireScope("GENERAL_USE")
+require_set_password = RequireScope("SET_PASSWORD")
+```
+
+### 2. Correção do Scheduler
+**Problema**: Usava asyncio que pode ter problemas com o startup do FastAPI.
+
+**Solução**: Implementado com threading daemon para maior compatibilidade:
+```python
+thread = Thread(target=cleanup_blacklist_task, daemon=True)
+thread.start()
+```
+
+### 3. Correção do JWT_REFRESH_VALIDITY
+**Problema**: Usava 604800 (7 dias) enquanto Backend Java usa 86400 (24 horas).
+
+**Solução**: Alterado para 86400 para igualar Backend Java.
+
+### 4. Correção do COOKIE_SECURE
+**Problema**: Hardcoded como `secure=True`.
+
+**Solução**: Adicionado configuração `cookie_secure` em settings (padrão false, igual Backend Java).
+
+### 5. Correção do endpoint /auth/logout
+**Problema**: Exigia autenticação, mas no Backend Java é público.
+
+**Solução**: Removida dependência de autenticação, agora é público (igual Backend Java).
+
+### 6. Remoção de imports não utilizados
+Removido import de `exceptions` não utilizado em `auth.py`.
+
 ## ✅ Camadas Implementadas
 
 ### 1. Autenticação JWT (`src/app/security/jwt_manager.py`)

@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/v1", tags=["chat"])
 async def enviarMensagem(
     requisicao: ChatRequest,
     request: Request,
-    current_user: str = Depends(require_general_use())
+    current_user: str = Depends(require_general_use)
 ) -> ChatResponse:
     """
     Endpoint para enviar mensagem ao assistente.
@@ -60,7 +60,7 @@ async def enviarMensagem(
 async def excluirChat(
     session_id: str,
     request: Request,
-    current_user: str = Depends(require_general_use())
+    current_user: str = Depends(require_general_use)
 ) -> ChatDeleteResponse:
     """
     Endpoint para excluir uma sessão de chat.
