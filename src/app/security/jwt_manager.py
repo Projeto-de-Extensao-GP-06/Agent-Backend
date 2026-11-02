@@ -1,3 +1,4 @@
+import base64
 import os
 import uuid
 from datetime import datetime, timedelta
@@ -18,8 +19,13 @@ class JWTManager:
     """
 
     def __init__(self):
-        self.secret_key = settings.jwt_secret
-        self.algorithm = "HS256"
+        # Decode Base64 secret to match Backend Java behavior
+        try:
+            self.secret_key = base64.b64decode(settings.jwt_secret)
+        except Exception:
+            # If not valid Base64, use as-is (fallback for development)
+            self.secret_key = settings.jwt_secret
+        self.algorithm = "HS384"  # Must match Backend Java
         self.access_token_expire_minutes = settings.jwt_validity // 60
         self.refresh_token_expire_days = settings.jwt_refresh_validity // 86400
 

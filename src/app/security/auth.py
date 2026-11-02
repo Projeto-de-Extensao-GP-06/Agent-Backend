@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status, Request
@@ -6,6 +7,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.app.security.jwt_manager import jwt_manager
 from src.app.security.token_blacklist import token_blacklist
 from src.app.security.middleware import get_token_from_request
+
+logger = logging.getLogger(__name__)
 
 
 security = HTTPBearer(auto_error=False)
@@ -35,8 +38,12 @@ async def get_current_user(
     """
     # Tenta extrair do cookie ou header
     token = get_token_from_request(request)
+    print(f"[DEBUG] Token extracted: {token[:50] if token else 'None'}...")
+    print(f"[DEBUG] Cookies: {request.cookies}")
+    print(f"[DEBUG] Authorization header: {request.headers.get('Authorization')}")
 
     if not token:
+        print("[DEBUG] No token provided")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token de autenticação não fornecido",
@@ -45,6 +52,7 @@ async def get_current_user(
 
     # Verifica se o token está na blacklist
     if token_blacklist.is_token_blacklisted(token):
+        print("[DEBUG] Token is blacklisted")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token foi revogado. Por favor, faça login novamente.",
@@ -52,7 +60,9 @@ async def get_current_user(
 
     # Verifica e decodifica o token
     payload = jwt_manager.verify_token(token)
+    print(f"[DEBUG] Token verification result: {payload is not None}")
     if payload is None:
+        print("[DEBUG] Token verification failed")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token inválido ou expirado",
@@ -60,7 +70,9 @@ async def get_current_user(
         )
 
     email = payload.get("sub")
+    print(f"[DEBUG] Email from token: {email}")
     if email is None:
+        print("[DEBUG] No email in token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token não contém usuário válido",
