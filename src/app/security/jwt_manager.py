@@ -25,7 +25,7 @@ class JWTManager:
         except Exception:
             # If not valid Base64, use as-is (fallback for development)
             self.secret_key = settings.jwt_secret
-        self.algorithm = "HS384"  # Must match Backend Java
+        self.algorithm = "HS512"  # Must match Backend Java
         self.access_token_expire_minutes = settings.jwt_validity // 60
         self.refresh_token_expire_days = settings.jwt_refresh_validity // 86400
 
