@@ -31,7 +31,7 @@ async def executarPipelineAgente(
             "messages": [HumanMessage(content=mensagemAnonimizada)],
             "dados_processo": processo,
         },
-        {"configurable": {"thread_id": idSessao}},
+        {"configurable": {"thread_id": idSessao}, "recursion_limit": 5},
     )
 
     mensagens = agent_response.get("messages", [])
