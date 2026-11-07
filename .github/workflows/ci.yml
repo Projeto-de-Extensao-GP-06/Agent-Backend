@@ -21,14 +21,14 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Instalar dependências (sem o modelo spacy pesado)
+      - name: Instalar dependências e pytest
         run: |
-          pip install --upgrade pip
-          # Instala tudo exceto o modelo spacy (pesado demais para CI)
+          pip install --upgrade pip pytest
+          # Instala tudo exceto o modelo spacy pesado
           grep -v "spacy-models" requirements.txt | pip install -r /dev/stdin
 
       - name: Verificar sintaxe com py_compile
         run: python -m py_compile src/app/main.py
 
-      - name: Rodar testes de estrutura (sem dependências externas)
-        run: python -m pytest tests/test_api_structure.py -v
+      - name: Rodar testes de estrutura
+        run: python -m unittest tests/test_api_structure.py -v
