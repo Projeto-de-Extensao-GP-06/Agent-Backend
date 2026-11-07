@@ -1,0 +1,34 @@
+name: CI - Agent (Testes Python)
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  test:
+    name: Validar sintaxe e rodar testes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar dependências (sem o modelo spacy pesado)
+        run: |
+          pip install --upgrade pip
+          # Instala tudo exceto o modelo spacy (pesado demais para CI)
+          grep -v "spacy-models" requirements.txt | pip install -r /dev/stdin
+
+      - name: Verificar sintaxe com py_compile
+        run: python -m py_compile src/app/main.py
+
+      - name: Rodar testes de estrutura (sem dependências externas)
+        run: python -m pytest tests/test_api_structure.py -v
