@@ -11,6 +11,14 @@ jobs:
     name: Validar sintaxe e rodar testes
     runs-on: ubuntu-latest
 
+    env:
+      LLM_API_KEY: "dummy-key-for-ci-tests"
+      LLM_MODEL: "gemini-3.8-flash"
+      JWT_SECRET: "test-secret-key-minimum-32-bytes-long!!"
+      JWT_VALIDITY: "3600"
+      JWT_REFRESH_VALIDITY: "86400"
+      COOKIE_SECURE: "false"
+
     steps:
       - name: Checkout do código
         uses: actions/checkout@v4
