@@ -1,6 +1,7 @@
-name: CD - Agent (Build e Deploy)
+﻿name: CD - Agent (Build e Deploy)
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -15,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout do código
+      - name: Checkout do cÃ³digo
         uses: actions/checkout@v4
 
       - name: Configurar credenciais AWS
@@ -37,7 +38,7 @@ jobs:
           IMAGE_URI="$REGISTRY/${{ env.ECR_REPOSITORY }}:latest"
           docker build -t $IMAGE_URI .
           docker push $IMAGE_URI
-          echo "✅ Imagem $IMAGE_URI enviada para o ECR"
+          echo "âœ… Imagem $IMAGE_URI enviada para o ECR"
 
   deploy:
     name: Deploy nas EC2s via SSM
@@ -53,21 +54,21 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Descobrir instâncias de Backend e atualizar container agent via SSM
+      - name: Descobrir instÃ¢ncias de Backend e atualizar container agent via SSM
         run: |
-          echo "Buscando instâncias ativas de backend..."
+          echo "Buscando instÃ¢ncias ativas de backend..."
           INSTANCE_IDS=$(aws ec2 describe-instances \
             --filters "Name=tag:Name,Values=ec2-backend-a,ec2-backend-b" "Name=instance-state-name,Values=running" \
             --query "Reservations[*].Instances[*].InstanceId" \
             --output text 2>/dev/null || echo "")
 
           if [ -z "$INSTANCE_IDS" ] || [ "$INSTANCE_IDS" = "None" ]; then
-            echo "⚠️ Nenhuma EC2 de backend ativa encontrada no momento (ambiente desligado/destroy)."
-            echo "✅ A nova imagem já foi publicada no Amazon ECR com sucesso! Quando a infraestrutura for recriada, ela subirá com essa versão."
+            echo "âš ï¸ Nenhuma EC2 de backend ativa encontrada no momento (ambiente desligado/destroy)."
+            echo "âœ… A nova imagem jÃ¡ foi publicada no Amazon ECR com sucesso! Quando a infraestrutura for recriada, ela subirÃ¡ com essa versÃ£o."
             exit 0
           fi
 
-          echo "Instâncias encontradas: $INSTANCE_IDS"
+          echo "InstÃ¢ncias encontradas: $INSTANCE_IDS"
 
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids $INSTANCE_IDS \
@@ -77,7 +78,7 @@ jobs:
             --output text)
 
           echo "SSM Command ID: $COMMAND_ID"
-          echo "Aguardando execução..."
+          echo "Aguardando execuÃ§Ã£o..."
           sleep 25
 
           FAILED=0
@@ -93,8 +94,9 @@ jobs:
           done
 
           if [ $FAILED -ne 0 ]; then
-            echo "❌ Deploy do Agent falhou em uma ou mais instâncias!"
+            echo "âŒ Deploy do Agent falhou em uma ou mais instÃ¢ncias!"
             exit 1
           fi
 
-          echo "✅ Agent atualizado com sucesso em todas as instâncias!"
+          echo "âœ… Agent atualizado com sucesso em todas as instÃ¢ncias!"
+
