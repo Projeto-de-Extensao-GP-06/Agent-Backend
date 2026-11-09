@@ -309,7 +309,7 @@ Resposta final + raw_response
 
 ## Docker
 
-O `Dockerfile` prepara a imagem para rodar a API com Uvicorn. Em produção, é recomendável:
+O `Dockerfile` prepara a imagem para rodar a API com Uvicorn. Em producao, é recomendável:
 - configurar `LLM_API_KEY` via ambiente ou secret manager
 - usar uma imagem Python fixa e testada
 - não armazenar segredos no código-fonte
@@ -321,9 +321,9 @@ O projeto já está em um estágio funcional de protótipo e arquitetura base pr
 
 ---
 
-## 🚀 Fluxo de Integração e Entrega Contínua (CI/CD)
+## 🚀 Fluxo de Integracao e Entrega Continua (CI/CD)
 
-O microserviço do **Agent MarIA** utiliza esteira de automação com **GitHub Actions**:
+O microserviço do **Agent MarIA** utiliza esteira de automacao com **GitHub Actions**:
 
 ```mermaid
 flowchart LR
@@ -333,16 +333,16 @@ flowchart LR
     Merge -->|Gatilho CD| Deploy[CD: Multi-stage Docker + ECR + SSM Deploy]
 ```
 
-### 1. Integração Contínua (CI) — `.github/workflows/ci.yml`
+### 1. Integracao Continua (CI) — `.github/workflows/ci.yml`
 * **Gatilho:** Todo **Pull Request** para `main` ou `develop`.
 * **Ações:**
   * Configura ambiente Python 3.12 com dependências enxutas.
   * Valida a sintaxe completa do código com `py_compile`.
   * Executa os testes de estrutura de rotas da API com `unittest` e validação do Pydantic.
 
-### 2. Entrega Contínua (CD) — `.github/workflows/cd.yml`
+### 2. Entrega Continua (CD) — `.github/workflows/cd.yml`
 * **Gatilho:** Todo **Push / Merge** na branch `main`.
 * **Ações:**
-  * Constrói a imagem Docker utilizando o **Dockerfile Multi-Stage** (estágio `builder` isola compilação e estágio `runner` produz imagem leve com usuário não-root).
+  * Constrói a imagem Docker utilizando o **Dockerfile Multi-Stage** (estágio `builder` isola compilacao e estágio `runner` produz imagem leve com usuário não-root).
   * Faz o push da imagem para o **Amazon ECR (`sgpj-agent:latest`)**.
   * Atualiza o container `sgpj-agent` nas instâncias de backend privadas (`ec2-backend-a` e `ec2-backend-b`) via **AWS SSM**.
