@@ -32,9 +32,6 @@ Agent-Backend/
 │       ├── config/
 │       │   ├── __init__.py
 │       │   └── settings.py        # leitura das variáveis de ambiente com Pydantic
-│       ├── entities/
-│       │   ├── __init__.py
-│       │   └── process.py         # entidades de domínio (processo, cliente, tribunal, etc.)
 │       ├── routes/
 │       │   ├── __init__.py
 │       │   └── chat.py            # endpoints da API de chat
@@ -74,8 +71,6 @@ Define os contratos de entrada e saída (DTOs / Pydantic models):
 - `ResumoResponse`
 - `ChatDeleteResponse`
 
-### `src/app/entities/process.py`
-Define as entidades de domínio relacionadas ao processo judicial (`ProcessoEntity`, `ClienteEntity`, `PrioridadeEntity`, `SiglaTribunalEntity`, `FaseProcessoEntity`).
 
 ### `src/app/services/agent_service.py`
 Orquestra o fluxo completo do agente:

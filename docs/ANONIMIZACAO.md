@@ -217,7 +217,7 @@ Contém a lógica de negócio para aplicar a anonimização e desanonimização 
 
 ### 5.2. `anonimizar_dados_processo(dados: dict[str, Any] | None, key: str | None = None) -> dict[str, Any] | None`
 
-- **Entrada:** Dicionário com informações contextuais do processo (ex: objeto `ProcessoEntity` ou payload `dados_processo`).
+- **Entrada:** Dicionário com informações contextuais do processo (payload `dados_processo`).
 - **Processamento:**
   - Executa uma **travessia recursiva** sobre a estrutura de dados:
     - Se for um `dict`, itera sobre todas as chaves e processa seus valores.
