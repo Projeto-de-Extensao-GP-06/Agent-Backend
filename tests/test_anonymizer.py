@@ -111,6 +111,7 @@ class AnonymizerTests(unittest.TestCase):
         self.assertEqual(anonimizado["valorCausa"], 15000.50)
         self.assertEqual(anonimizado["ativo"], True)
 
+        self.assertNotIn("John Doe", anonimizado["cliente"]["nome"])
         self.assertNotIn("347.144.900-01", anonimizado["cliente"]["cpf"])
         self.assertNotIn("(11) 90303-0303", anonimizado["cliente"]["telefone"])
         self.assertNotIn("09.904.401/0001-40", anonimizado["descricaoCaso"])
@@ -125,6 +126,107 @@ class AnonymizerTests(unittest.TestCase):
             desanonimizar_texto(anonimizado["processo_cnj"]),
             "0000001-84.2020.8.26.0001",
         )
+
+    def test_schema_sgpj_anonimiza_apenas_campos_sensiveis_e_preserva_metadados(self):
+        dados_sgpj = {
+            "usuarioResponsavelId": "usr-101",
+            "usuarioResponsavelNome": "Dra. Fernanda Lima",
+            "clienteId": "cli-502",
+            "clientNomeRazaoSocial": "João Pereira",
+            "descricaoCaso": "Ação de indenização de João Pereira fundada na LGPD contra Silva & Souza Transportes Ltda.",
+            "obervacao": "Cliente João Pereira solicitou acompanhamento prioritário no SAJ.",
+            "valorCausa": 25000.00,
+            "prioridade": {"nome": "Alta", "peso": 10},
+            "faseProcesso": {"nome": "Em andamento", "ordem": 3},
+            "status": "Ativo",
+            "dataAudiencia": "2026-09-10T14:00:00",
+            "dataHoraInicio": "2026-07-15T09:00:00",
+            "ultimaAtualizacao": "2026-08-29T15:30:00",
+            "siglaTribunal": {"sigla": "TJSP", "nome": "Tribunal de Justiça de São Paulo"},
+            "numeroCnj": "0000001-84.2020.8.26.0001",
+            "tribunalTramitacao": "Tribunal de Justiça de São Paulo",
+            "instancia": "1ª Instância",
+            "dataAjuizamento": "2020-01-10",
+            "nivelSigilo": "Público",
+            "classeProcessual": "Procedimento Comum Cível",
+            "formato": "Eletrônico",
+            "sistemaTribunal": "SAJ",
+            "orgaoJulgador": "1ª Vara Cível",
+            "assunto": "Proteção de Dados Pessoais (LGPD)",
+            "ultimoMovimento": "Despacho proferido intimando Dra. Fernanda Lima no processo 0000001-84.2020.8.26.0001.",
+            "historicoProcessoResponses": [
+                {
+                    "usuarioResponsavelId": "usr-101",
+                    "usuarioResponsavelNome": "Dra. Fernanda Lima",
+                    "dataAlteracao": "2026-08-29T15:30:00",
+                    "tipoAtualizacao": "ALTERACAO_FASE",
+                }
+            ],
+        }
+
+        mapa_tokens: dict[str, str] = {}
+        anonimizado = transformarDadosProcessoIn(dados_sgpj, mapaTokens=mapa_tokens)
+
+        # 1. Identificação, Partes e CNJ foram mascarados com placeholders curtos
+        from src.app.services.anonymizer import PLACEHOLDER_PATTERN
+        self.assertRegex(anonimizado["usuarioResponsavelId"], PLACEHOLDER_PATTERN)
+        self.assertRegex(anonimizado["usuarioResponsavelNome"], PLACEHOLDER_PATTERN)
+        self.assertRegex(anonimizado["clienteId"], PLACEHOLDER_PATTERN)
+        self.assertRegex(anonimizado["clientNomeRazaoSocial"], PLACEHOLDER_PATTERN)
+        self.assertRegex(anonimizado["numeroCnj"], PLACEHOLDER_PATTERN)
+        self.assertNotEqual(anonimizado["usuarioResponsavelId"], "usr-101")
+        self.assertNotEqual(anonimizado["usuarioResponsavelNome"], "Dra. Fernanda Lima")
+        self.assertNotEqual(anonimizado["clienteId"], "cli-502")
+        self.assertNotEqual(anonimizado["clientNomeRazaoSocial"], "João Pereira")
+        self.assertNotEqual(anonimizado["numeroCnj"], "0000001-84.2020.8.26.0001")
+
+        # 2. Histórico: quem alterou foi cifrado, quando e tipo foram preservados
+        hist = anonimizado["historicoProcessoResponses"][0]
+        self.assertEqual(hist["usuarioResponsavelId"], anonimizado["usuarioResponsavelId"])
+        self.assertEqual(hist["usuarioResponsavelNome"], anonimizado["usuarioResponsavelNome"])
+        self.assertEqual(hist["dataAlteracao"], "2026-08-29T15:30:00")
+        self.assertEqual(hist["tipoAtualizacao"], "ALTERACAO_FASE")
+
+        # 3. Textos livres tiveram PII e nomes das partes cifrados, mas preservaram LGPD e SAJ
+        self.assertNotIn("João Pereira", anonimizado["descricaoCaso"])
+        self.assertNotIn("Silva & Souza Transportes Ltda", anonimizado["descricaoCaso"])
+        self.assertIn("LGPD", anonimizado["descricaoCaso"])
+
+        self.assertNotIn("João Pereira", anonimizado["obervacao"])
+        self.assertIn("SAJ", anonimizado["obervacao"])
+
+        self.assertNotIn("Dra. Fernanda Lima", anonimizado["ultimoMovimento"])
+        self.assertNotIn("0000001-84.2020.8.26.0001", anonimizado["ultimoMovimento"])
+
+        # 4. Metadados do sistema e do tribunal permaneceram 100% em texto claro
+        self.assertEqual(anonimizado["valorCausa"], 25000.00)
+        self.assertEqual(anonimizado["prioridade"], {"nome": "Alta", "peso": 10})
+        self.assertEqual(anonimizado["faseProcesso"], {"nome": "Em andamento", "ordem": 3})
+        self.assertEqual(anonimizado["status"], "Ativo")
+        self.assertEqual(anonimizado["siglaTribunal"], {"sigla": "TJSP", "nome": "Tribunal de Justiça de São Paulo"})
+        self.assertEqual(anonimizado["tribunalTramitacao"], "Tribunal de Justiça de São Paulo")
+        self.assertEqual(anonimizado["instancia"], "1ª Instância")
+        self.assertEqual(anonimizado["nivelSigilo"], "Público")
+        self.assertEqual(anonimizado["classeProcessual"], "Procedimento Comum Cível")
+        self.assertEqual(anonimizado["formato"], "Eletrônico")
+        self.assertEqual(anonimizado["sistemaTribunal"], "SAJ")
+        self.assertEqual(anonimizado["orgaoJulgador"], "1ª Vara Cível")
+        self.assertEqual(anonimizado["assunto"], "Proteção de Dados Pessoais (LGPD)")
+
+        # 5. Mensagem do usuário mencionando LGPD, TJSP e o nome real do cliente (João Pereira)
+        msg_usuario = "Como a lgpd se aplica ao processo do João Pereira no TJSP?"
+        msg_anonimizada = transformarMensagemIn(
+            msg_usuario,
+            dadosProcesso=dados_sgpj,
+            mapaTokens=mapa_tokens,
+        )
+        self.assertIn("lgpd", msg_anonimizada)
+        self.assertIn("TJSP", msg_anonimizada)
+        self.assertNotIn("João Pereira", msg_anonimizada)
+        self.assertIn(anonimizado["clientNomeRazaoSocial"], msg_anonimizada)
+
+        # 6. Desanonimização restaura perfeitamente
+        self.assertEqual(transformarDadosProcessoOut(msg_anonimizada), msg_usuario)
 
     def test_transformar_dados_processo_in_e_out(self):
         dados_processo = {
@@ -154,7 +256,7 @@ class AnonymizerTests(unittest.TestCase):
             "processo": "0000001-84.2020.8.26.0001",
         }
 
-        msg_anonimizada = transformarMensagemIn(mensagem_usuario)
+        msg_anonimizada = transformarMensagemIn(mensagem_usuario, dadosProcesso=dados_processo)
         proc_anonimizado = transformarDadosProcessoIn(dados_processo)
 
         # Mensagem do usuário foi devidamente anonimizada
@@ -175,9 +277,11 @@ class AnonymizerTests(unittest.TestCase):
         self.assertIn("0000001-84.2020.8.26.0001", resposta_restaurada)
         self.assertIn("Silva & Souza Transportes Ltda", resposta_restaurada)
 
-    def test_deny_list_ignora_verbos_e_comandos_no_inicio_de_frase(self):
-        # Garante que 'Retorne' e outros comandos usuais NÃO sejam criptografados
-        frases_comandos = [
+    def test_nao_censura_siglas_juridicas_lgpd_nem_comandos_do_usuario(self):
+        frases = [
+            "O que a lgpd diz sobre este processo?",
+            "Como a lgpd me afeta e o que ela me garante?",
+            "Explique as regras da LGPD e do CNJ no sistema SAJ do TJSP.",
             "Retorne os dados do processo.",
             "Retorne por favor.",
             "Retorne.",
@@ -189,7 +293,7 @@ class AnonymizerTests(unittest.TestCase):
             "Quero saber o andamento.",
         ]
 
-        for frase in frases_comandos:
+        for frase in frases:
             anonimizado, itens = anonimizar_texto(frase)
             self.assertEqual(
                 anonimizado,
@@ -198,10 +302,10 @@ class AnonymizerTests(unittest.TestCase):
             )
             self.assertEqual(len(itens), 0)
 
-        # Garante que com PII na mesma frase, o comando é preservado e o PII é cifrado
-        frase_mista = "Retorne os dados do CPF 347.144.900-01, por favor."
+        # Garante que com PII na mesma frase, o comando e siglas são preservados e o PII é cifrado
+        frase_mista = "Retorne os dados de LGPD do CPF 347.144.900-01, por favor."
         anonimizado_misto, _ = anonimizar_texto(frase_mista)
-        self.assertTrue(anonimizado_misto.startswith("Retorne os dados do CPF "))
+        self.assertTrue(anonimizado_misto.startswith("Retorne os dados de LGPD do CPF "))
         self.assertNotIn("347.144.900-01", anonimizado_misto)
         self.assertTrue(anonimizado_misto.endswith(", por favor."))
 

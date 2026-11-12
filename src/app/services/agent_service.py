@@ -9,11 +9,16 @@ from src.app.services.anonymizer import (
     anonimizar_dados_processo,
     anonimizar_texto,
     desanonimizar_texto,
+    extrair_termos_sensiveis_processo,
     limpar_cofre_sessao,
     obter_cofre_sessao,
 )
 
 agent = criarAgente()
+
+# Cache em memória por sessão para reaproveitar termos sensíveis e tokens do processo entre turnos
+_sessao_termos_conhecidos: dict[str, list[str]] = {}
+_sessao_mapa_tokens: dict[str, dict[str, str]] = {}
 
 
 async def executarPipelineAgente(
@@ -25,12 +30,30 @@ async def executarPipelineAgente(
     if not mensagemNormalizada:
         raise ValueError("A mensagem nao pode estar vazia")
 
-    processo = (
-        transformarDadosProcessoIn(dadosProcesso, idSessao=idSessao)
-        if dadosProcesso is not None
-        else None
+    mapa_tokens = _sessao_mapa_tokens.setdefault(idSessao, {})
+
+    if dadosProcesso is not None:
+        termos_atuais = extrair_termos_sensiveis_processo(dadosProcesso)
+        termos_sessao = _sessao_termos_conhecidos.setdefault(idSessao, [])
+        for termo in termos_atuais:
+            if termo not in termos_sessao:
+                termos_sessao.append(termo)
+        processo = transformarDadosProcessoIn(
+            dadosProcesso,
+            mapaTokens=mapa_tokens,
+            idSessao=idSessao,
+        )
+    else:
+        processo = None
+        termos_sessao = _sessao_termos_conhecidos.get(idSessao, [])
+
+    mensagemAnonimizada = transformarMensagemIn(
+        mensagemNormalizada,
+        dadosProcesso=dadosProcesso,
+        termosConhecidos=termos_sessao,
+        mapaTokens=mapa_tokens,
+        idSessao=idSessao,
     )
-    mensagemAnonimizada = transformarMensagemIn(mensagemNormalizada, idSessao=idSessao)
 
     agent_response = await agent.ainvoke(
         {
@@ -68,24 +91,50 @@ async def executarPipelineAgente(
     }
 
 
-def transformarMensagemIn(mensagem: str, idSessao: str | None = None) -> str:
-    """Anonimiza os dados sensíveis do texto enviado pelo usuário antes do envio ao agente/LLM."""
+def transformarMensagemIn(
+    mensagem: str,
+    dadosProcesso: dict[str, Any] | None = None,
+    termosConhecidos: Sequence[str] | None = None,
+    mapaTokens: dict[str, str] | None = None,
+    idSessao: str | None = None,
+) -> str:
+    """
+    Anonimiza os dados sensíveis do texto enviado pelo usuário antes do envio ao agente/LLM.
+    Limita-se a padrões determinísticos (CPF, CNPJ, RG, Telefone, E-mail, CNJ, Razão Social)
+    e aos nomes/identificadores reais extraídos de `dadosProcesso`.
+    """
     if not mensagem or not isinstance(mensagem, str):
         return mensagem
 
-    texto_anonimizado, _ = anonimizar_texto(mensagem, session_id=idSessao)
+    termos: list[str] = list(termosConhecidos) if termosConhecidos else []
+    if dadosProcesso is not None:
+        for t in extrair_termos_sensiveis_processo(dadosProcesso):
+            if t not in termos:
+                termos.append(t)
+
+    texto_anonimizado, _ = anonimizar_texto(
+        mensagem,
+        termos_conhecidos=termos or None,
+        mapa_tokens=mapaTokens,
+        session_id=idSessao,
+    )
     return texto_anonimizado
 
 
 def transformarDadosProcessoIn(
     dadosProcesso: dict[str, Any] | None,
+    mapaTokens: dict[str, str] | None = None,
     idSessao: str | None = None,
 ) -> dict[str, Any] | None:
     """Anonimiza os dados sensíveis do processo antes do envio ao agente/LLM."""
     if dadosProcesso is None:
         return None
 
-    return anonimizar_dados_processo(dadosProcesso, session_id=idSessao)
+    return anonimizar_dados_processo(
+        dadosProcesso,
+        mapa_tokens=mapaTokens,
+        session_id=idSessao,
+    )
 
 
 def transformarDadosProcessoOut(message: Any, idSessao: str | None = None) -> Any:
@@ -115,6 +164,8 @@ def conteudoParaTexto(conteudo: Any) -> str:
 
 
 def excluirSessao(idSessao: str) -> bool:
+    _sessao_termos_conhecidos.pop(idSessao, None)
+    _sessao_mapa_tokens.pop(idSessao, None)
     limpar_cofre_sessao(idSessao)
     return delete_thread(idSessao)
 

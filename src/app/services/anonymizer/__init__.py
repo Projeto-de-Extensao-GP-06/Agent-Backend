@@ -17,6 +17,7 @@ from src.app.services.anonymizer.service import (
     anonimizar_dados_processo,
     anonimizar_texto,
     desanonimizar_texto,
+    extrair_termos_sensiveis_processo,
     limpar_cofre_sessao,
     obter_cofre_sessao,
 )
@@ -38,4 +39,5 @@ __all__ = [
     "anonimizar_texto",
     "anonimizar_dados_processo",
     "desanonimizar_texto",
+    "extrair_termos_sensiveis_processo",
 ]
