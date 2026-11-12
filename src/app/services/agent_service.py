@@ -9,6 +9,8 @@ from src.app.services.anonymizer import (
     anonimizar_dados_processo,
     anonimizar_texto,
     desanonimizar_texto,
+    limpar_cofre_sessao,
+    obter_cofre_sessao,
 )
 
 agent = criarAgente()
@@ -23,8 +25,12 @@ async def executarPipelineAgente(
     if not mensagemNormalizada:
         raise ValueError("A mensagem nao pode estar vazia")
 
-    processo = transformarDadosProcessoIn(dadosProcesso) if dadosProcesso != None else None
-    mensagemAnonimizada = transformarMensagemIn(mensagemNormalizada)
+    processo = (
+        transformarDadosProcessoIn(dadosProcesso, idSessao=idSessao)
+        if dadosProcesso is not None
+        else None
+    )
+    mensagemAnonimizada = transformarMensagemIn(mensagemNormalizada, idSessao=idSessao)
 
     agent_response = await agent.ainvoke(
         {
@@ -40,7 +46,7 @@ async def executarPipelineAgente(
 
     message = conteudoParaTexto(mensagens[-1].content)
 
-    resposta = transformarDadosProcessoOut(message)
+    resposta = transformarDadosProcessoOut(message, idSessao=idSessao)
 
     if not resposta:
         raise RuntimeError("O assistente retornou uma resposta sem texto")
@@ -53,6 +59,7 @@ async def executarPipelineAgente(
             "mensagem_anonimizada": mensagemAnonimizada,
             "dados_processo_original": dadosProcesso,
             "dados_processo_anonimizado": processo or agent_response.get("dados_processo"),
+            "mapa_anonimizacao": obter_cofre_sessao(idSessao).exportar_mapa(),
             "retorno_modelo": message,
             "pos_desanonimizacao": resposta,
             "llm_calls": agent_response.get("llm_calls", 1),
@@ -61,28 +68,32 @@ async def executarPipelineAgente(
     }
 
 
-def transformarMensagemIn(mensagem: str) -> str:
+def transformarMensagemIn(mensagem: str, idSessao: str | None = None) -> str:
     """Anonimiza os dados sensíveis do texto enviado pelo usuário antes do envio ao agente/LLM."""
     if not mensagem or not isinstance(mensagem, str):
         return mensagem
 
-    texto_anonimizado, _ = anonimizar_texto(mensagem)
+    texto_anonimizado, _ = anonimizar_texto(mensagem, session_id=idSessao)
     return texto_anonimizado
 
-def transformarDadosProcessoIn(dadosProcesso: dict[str, Any] | None) -> dict[str, Any] | None:
+
+def transformarDadosProcessoIn(
+    dadosProcesso: dict[str, Any] | None,
+    idSessao: str | None = None,
+) -> dict[str, Any] | None:
     """Anonimiza os dados sensíveis do processo antes do envio ao agente/LLM."""
     if dadosProcesso is None:
         return None
 
-    return anonimizar_dados_processo(dadosProcesso)
+    return anonimizar_dados_processo(dadosProcesso, session_id=idSessao)
 
 
-def transformarDadosProcessoOut(message: Any) -> Any:
-    """Restaura dados sensíveis criptografados presentes na resposta do agente/LLM."""
+def transformarDadosProcessoOut(message: Any, idSessao: str | None = None) -> Any:
+    """Restaura dados sensíveis presentes na resposta do agente/LLM."""
     if not isinstance(message, str):
         return message
 
-    return desanonimizar_texto(message)
+    return desanonimizar_texto(message, session_id=idSessao)
 
 
 def conteudoParaTexto(conteudo: Any) -> str:
@@ -104,6 +115,7 @@ def conteudoParaTexto(conteudo: Any) -> str:
 
 
 def excluirSessao(idSessao: str) -> bool:
+    limpar_cofre_sessao(idSessao)
     return delete_thread(idSessao)
 
 
