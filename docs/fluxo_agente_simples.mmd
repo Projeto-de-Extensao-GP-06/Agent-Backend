@@ -1,0 +1,19 @@
+flowchart TD
+    U([Cliente]) -->|POST /api/v1/chat| API[FastAPI<br/>JWT + rate limit]
+    API --> ANON[Anonimização Microsoft presídio <br/>mensagem + dados do processo]
+    ANON --> GI[/"🚧 WIP: Guardrail de entrada"/]
+    GI --> AG
+
+    subgraph LG[Grafo LangGraph]
+        AG[agent<br/>Gemini + prompt]
+        AG -->|tem tool_calls| TL[tools<br/>testeTool]
+        TL --> AG
+    end
+
+    AG -->|sem tool_calls| GO[/"🚧 WIP: Guardrail de saída"/]
+    GO --> DES[Desanonimização]
+    DES --> API2[FastAPI<br/>ChatResponse]
+    API2 --> U
+
+    style GI fill:#6f42c1,stroke:#d6c4f5,color:#ffffff,stroke-dasharray: 5 5
+    style GO fill:#6f42c1,stroke:#d6c4f5,color:#ffffff,stroke-dasharray: 5 5
