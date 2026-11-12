@@ -8,37 +8,38 @@ Este documento descreve detalhadamente o funcionamento, os princípios criptogr�
 
 O objetivo deste módulo é garantir a **privacidade de dados sensíveis (PII)** e a conformidade com a **LGPD (Lei Geral de Proteção de Dados)**, impedindo que informações pessoais e confidenciais de processos jurídicos e clientes sejam enviadas em texto aberto para Provedores de Modelos de Linguagem (LLMs, ex: Google Gemini, OpenAI).
 
-### Anonimização Reversível vs. Irreversível
+### Anonimização Reversível com Placeholders Curtos e Cofre Criptográfico
 
-Ao contrário da anonimização destrutiva (como substituição fixa por `<CPF>` ou máscara `***`), este sistema adota a **anonimização reversível criptográfica**:
+Ao contrário da anonimização destrutiva (como substituição fixa por `<CPF>` ou máscara `***`) e diferente do envio direto de strings Base64 longas ao modelo, este sistema combina **criptografia reversível AES-CBC** com **placeholders curtos por sessão** (`[TIPO_N]`):
 
-1. **Entrada (Antes do LLM):** Os dados sensíveis identificados são criptografados com o algoritmo simétrico **AES (Advanced Encryption Standard)** em modo **CBC**, com vetor de inicialização aleatório (**IV de 16 bytes**) e preenchimento **PKCS7**. O resultado é codificado em **Base64 URL-safe**.
-2. **Processamento pelo LLM:** O LLM recebe o contexto estruturado contendo apenas os tokens criptografados (ex: `DJJCE-kyp90LBzgkZu-7Usv0eKfmfSFtvf7CDypv4D4=`). O modelo consegue raciocinar sobre as relações dos dados sem ter acesso ao dado real.
-3. **Saída (Após o LLM):** Quando o LLM cita ou responde mencionando algum dado cifrado, o sistema identifica os tokens na resposta e executa a **desanonimização**, restaurando os valores originais antes de entregá-los ao usuário final na API.
+1. **Entrada (Antes do LLM):** Os dados sensíveis identificados pelo Presidio são criptografados com o algoritmo simétrico **AES (Advanced Encryption Standard)** em modo **CBC** (IV aleatório de 16 bytes, padding **PKCS7**, codificação **Base64 URL-safe**). Cada token cifrado é armazenado no **Cofre de Anonimização da sessão (`CofreAnonimizacao`)** e substituído no texto por um placeholder curto e legível (ex.: `[PESSOA_1]`, `[CPF_1]`, `[EMPRESA_1]`). Valores idênticos na mesma sessão recebem um resumo determinístico **HMAC-SHA256** e reutilizam o mesmo placeholder sem jamais armazenar texto claro no cofre.
+2. **Processamento pelo LLM:** O LLM recebe o contexto contendo apenas os placeholders curtos (`[PESSOA_1]`, `[CPF_1]`, etc.). Como são curtos e estruturados, o modelo consegue correlacionar entidades repetidas (ex.: o mesmo responsável em várias entradas de histórico) e copiá-los fielmente sem risco de corromper ou alucinar caracteres de um Base64 longo.
+3. **Saída (Após o LLM):** Na resposta do modelo, o sistema localiza os placeholders via `PLACEHOLDER_PATTERN`, consulta o respectivo token AES no cofre da sessão, executa a descriptografia (`AESCipher.decrypt`) e restaura os valores originais antes de entregar a resposta na API. Também é mantido um fallback de compatibilidade para descriptografar tokens AES-CBC diretos via `DeanonymizeEngine`.
 
 ```mermaid
 flowchart TD
     subgraph Cliente["1. Camada de Entrada"]
-        Req["Requisição API (/api/v1/chat)"] --> Dados["dados_processo (com PII em texto claro)"]
+        Req["Requisição API (/api/v1/chat)"] --> Dados["mensagem e dados_processo (com PII em texto claro)"]
     end
 
-    subgraph Anonimizacao["2. Pipeline de Anonimização"]
-        Dados --> In["transformarDadosProcessoIn()"]
+    subgraph Anonimizacao["2. Pipeline de Anonimização + Cofre da Sessão"]
+        Dados --> In["transformarMensagemIn() / transformarDadosProcessoIn()"]
         In --> Rec["Identificação via Recognizers Personalizados"]
         Rec --> Enc["AnonymizerEngine (AES-CBC Encrypt)"]
-        Enc --> DadosAnon["dados_processo Criptografado"]
+        Enc --> Vault["CofreAnonimizacao (HMAC-SHA256 dedup + placeholder -> AES)"]
+        Vault --> DadosAnon["Texto/JSON com placeholders curtos ([PESSOA_1], [CPF_1])"]
     end
 
     subgraph Agente["3. Camada do Modelo (LLM)"]
         DadosAnon --> Prompt["Injeção no SYSTEM_PROMPT"]
         Prompt --> LLM["Agente LangGraph / Gemini"]
-        LLM --> RespCifrada["Resposta gerada (com tokens cifrados)"]
+        LLM --> RespMask["Resposta gerada (com placeholders [PESSOA_1], ...)"]
     end
 
     subgraph Desanonimizacao["4. Pipeline de Desanonimização"]
-        RespCifrada --> Out["transformarDadosProcessoOut()"]
-        Out --> TokenFinder["Identificação de Tokens Cifrados"]
-        TokenFinder --> Dec["DeanonymizeEngine (AES Decrypt)"]
+        RespMask --> Out["transformarDadosProcessoOut()"]
+        Out --> PlaceholderFinder["Busca por PLACEHOLDER_PATTERN + consulta ao Cofre"]
+        PlaceholderFinder --> Dec["AESCipher.decrypt (e fallback DeanonymizeEngine)"]
         Dec --> RespClara["Resposta final com dados reais restaurados"]
     end
 
@@ -53,10 +54,10 @@ O módulo de anonimização foi organizado em um subpacote dedicado para manter 
 
 ```
 src/app/services/anonymizer/
-├── __init__.py           # Exporta a interface pública limpa do módulo
+├── __init__.py           # Exporta a interface pública limpa do módulo e utilitários do cofre
 ├── recognizers.py        # 6 Recognizers brasileiros com algoritmos de validação
 ├── engine.py             # Configuração e inicialização singleton dos motores Presidio
-└── service.py            # Funções de anonimização recursiva e desanonimização de saída
+└── service.py            # CofreAnonimizacao por sessão, placeholders curtos e fallback AES
 ```
 
 ---
@@ -200,79 +201,96 @@ Implementa o padrão **Singleton com Carregamento Preguiçoso (Lazy Loading)** p
 
 ---
 
-## 5. Serviços de Transformação (`service.py`)
+## 5. Serviços de Transformação e Cofre da Sessão (`service.py`)
 
 Arquivo: [`src/app/services/anonymizer/service.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/src/app/services/anonymizer/service.py)
 
-Contém a lógica de negócio para aplicar a anonimização e desanonimização nos dados que trafegam pelo agente.
+Contém a lógica de negócio para aplicar a anonimização com placeholders curtos, o cofre criptográfico isolado por sessão e a desanonimização na saída do modelo.
 
-### 5.1. `anonimizar_texto(texto: str, key: str | None = None) -> tuple[str, list[dict[str, Any]]]`
+### 5.1. `CofreAnonimizacao` e Gerenciamento por Sessão
 
-- **Entrada:** String de texto contendo dados sensíveis em texto claro e chave AES opcional.
+- **`CofreAnonimizacao`:** Estrutura thread-safe (`threading.Lock`) que mapeia `placeholder -> token_aes_cifrado` (ex.: `"[PESSOA_1]" -> "DJJCE-..."`).
+  - **Zero texto claro em memória do cofre:** Para garantir reutilização consistente quando a mesma entidade aparece múltiplas vezes (na mesma mensagem, em listas de histórico ou em turnos subsequentes da sessão), o cofre calcula um resumo determinístico via **HMAC-SHA256** (`hmac(key, f"{prefixo}:{valor}")`) apenas para deduplicação, armazenando exclusivamente o token cifrado em AES.
+  - **Prefixos amigáveis (`ENTITY_PREFIX_MAP`):** Entidades do Presidio são convertidas em prefixos legíveis para o LLM: `PERSON`/`PER` -> `PESSOA`, `BR_CPF` -> `CPF`, `BR_CNPJ` -> `CNPJ`, `BR_RG` -> `RG`, `PHONE_NUMBER` -> `TELEFONE`, `BR_RAZAO_SOCIAL` -> `EMPRESA`, `BR_CNJ` -> `PROCESSO_CNJ`, `EMAIL_ADDRESS` -> `EMAIL`, `LOCATION` -> `LOCAL`, `ORGANIZATION` -> `ORGANIZACAO`, entre outros.
+- **`obter_cofre_sessao(session_id: str) -> CofreAnonimizacao`:** Obtém ou inicializa o cofre isolado de uma sessão.
+- **`limpar_cofre_sessao(session_id: str) -> bool`:** Descarta o cofre ao encerrar/excluir a sessão.
+
+### 5.2. `anonimizar_texto(texto: str, key: str | None = None, session_id: str | None = None, cofre: CofreAnonimizacao | None = None) -> tuple[str, list[dict[str, Any]]]`
+
+- **Entrada:** String de texto contendo dados sensíveis em texto claro, chave AES opcional e identificador de sessão (ou instância explícita de `CofreAnonimizacao`).
 - **Processamento:**
-  1. Invoca `analyzer.analyze(text=texto, language="pt")` (com fallback para `"en"`).
-  2. Se encontrar entidades, configura o operador `OperatorConfig("encrypt", {"key": encryption_key})`.
-  3. Executa `anonymizer.anonymize()`, que substitui cada dado sensível pelo token criptografado correspondente.
-- **Saída:** Tupla com o texto cifrado e a lista de dicionários contendo metadados de cada entidade cifrada (`start`, `end`, `entity_type`, `text`, `operator`).
+  1. Invoca `analyzer.analyze(text=texto, language="pt")` e filtra termos comuns da deny-list (`IGNORAR_ENTIDADES`).
+  2. Executa `anonymizer.anonymize()` com `OperatorConfig("encrypt", {"key": encryption_key})`, resolvendo conflitos de sobreposição e cifrando cada entidade em AES-CBC.
+  3. Ordena os itens da esquerda para a direita, registra cada token cifrado no `CofreAnonimizacao` ativo e substitui o token Base64 longo pelo placeholder curto correspondente (`[PESSOA_1]`, `[CPF_1]`, etc.).
+- **Saída:** Tupla com o texto contendo placeholders curtos e a lista de metadados das entidades mascaradas (`start`, `end`, `entity_type`, `text`, `operator`: `"placeholder_aes"`).
 
-### 5.2. `anonimizar_dados_processo(dados: dict[str, Any] | None, key: str | None = None) -> dict[str, Any] | None`
+### 5.3. `anonimizar_dados_processo(dados: dict[str, Any] | None, key: str | None = None, session_id: str | None = None, cofre: CofreAnonimizacao | None = None) -> dict[str, Any] | None`
 
-- **Entrada:** Dicionário com informações contextuais do processo (ex: objeto `ProcessoEntity` ou payload `dados_processo`).
+- **Entrada:** Dicionário com informações contextuais do processo (ex.: objeto `ProcessoEntity` ou payload `dados_processo`) e contexto de sessão opcional.
 - **Processamento:**
-  - Executa uma **travessia recursiva** sobre a estrutura de dados:
+  - Executa uma **travessia recursiva** sobre a estrutura de dados usando o mesmo cofre da sessão:
     - Se for um `dict`, itera sobre todas as chaves e processa seus valores.
     - Se for uma `list`, itera sobre cada item da lista.
-    - Se for uma `str`, invoca `anonimizar_texto(valor)` e substitui o valor pelo texto criptografado.
+    - Se for uma `str`, invoca `anonimizar_texto(valor, key=key, session_id=session_id, cofre=cofre_ativo)`.
     - Se for de tipo primitivo (`int`, `float`, `bool`, `None`), mantém o valor intacto.
-- **Saída:** Novo dicionário idêntico na sua hierarquia, com todos os campos de texto devidamente protegidos e cifrados.
+- **Saída:** Novo dicionário idêntico na sua hierarquia, com todos os campos de texto protegidos por placeholders consistentes.
 
-### 5.3. `desanonimizar_texto(texto: str, key: str | None = None) -> str`
+### 5.4. `desanonimizar_texto(texto: str, key: str | None = None, session_id: str | None = None, cofre: CofreAnonimizacao | None = None) -> str`
 
-- **Entrada:** Resposta gerada pelo LLM contendo potencialmente tokens cifrados.
+- **Entrada:** Resposta gerada pelo LLM contendo placeholders `[TIPO_N]` (ou tokens AES diretos).
 - **Processamento:**
-  1. Localiza candidatos a tokens cifrados através da expressão regular:
-     ```python
-     ENCRYPTED_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43,}={0,2}")
-     ```
-  2. Para cada candidato, testa preliminarmente com `AESCipher.decrypt(key, token)`. Se o token for decifrável pela chave do sistema, cria um objeto `OperatorResult(start, end, entity_type="ENCRYPTED_PII")`.
-  3. Passa a lista de entidades e o texto para `deanonymizer.deanonymize()` com o operador `decrypt` e a chave simétrica.
+  1. **Restauração de Placeholders:** Localiza candidatos com `PLACEHOLDER_PATTERN` (`r"\[[A-Z][A-Z0-9_]*_\d+\]"`), consulta o token AES correspondente no cofre da sessão e o decifra com `AESCipher.decrypt`. Placeholders desconhecidos são mantidos intactos.
+  2. **Fallback para Tokens AES Diretos:** Em seguida, busca eventuais tokens AES-CBC diretos com `ENCRYPTED_TOKEN_PATTERN` (`r"[A-Za-z0-9_-]{43,}={0,2}"`), tratando também casos envolvidos em itálico Markdown (`_TOKEN_`) e restaurando-os via `DeanonymizeEngine`. Candidatos com sufixo `=` que falharem na decifragem registram `logger.warning` para observabilidade.
 - **Saída:** String com todos os dados sensíveis restaurados na sua forma original em texto legível.
 
 ---
 
-## 6. Integração no `agent_service.py`
+## 6. Integração no `agent_service.py` e `prompts.py`
 
-Arquivo: [`src/app/services/agent_service.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/src/app/services/agent_service.py)
+Arquivos: [`src/app/services/agent_service.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/src/app/services/agent_service.py) e [`src/app/agent/prompts.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/src/app/agent/prompts.py)
 
-A orquestração do pipeline de chat conecta a anonimização e desanonimização através de duas funções principais:
+A orquestração do pipeline de chat conecta a anonimização por sessão e a desanonimização através das funções abaixo:
 
-### 6.1. `transformarDadosProcessoIn(dadosProcesso: dict[str, Any] | None) -> dict[str, Any] | None`
+### 6.1. `transformarMensagemIn` e `transformarDadosProcessoIn`
 
 ```python
-def transformarDadosProcessoIn(dadosProcesso: dict[str, Any] | None) -> dict[str, Any] | None:
+def transformarMensagemIn(mensagem: str, idSessao: str | None = None) -> str:
+    """Anonimiza os dados sensíveis do texto enviado pelo usuário antes do envio ao agente/LLM."""
+    if not mensagem or not isinstance(mensagem, str):
+        return mensagem
+
+    texto_anonimizado, _ = anonimizar_texto(mensagem, session_id=idSessao)
+    return texto_anonimizado
+
+
+def transformarDadosProcessoIn(
+    dadosProcesso: dict[str, Any] | None,
+    idSessao: str | None = None,
+) -> dict[str, Any] | None:
     """Anonimiza os dados sensíveis do processo antes do envio ao agente/LLM."""
     if dadosProcesso is None:
         return None
 
-    return anonimizar_dados_processo(dadosProcesso)
+    return anonimizar_dados_processo(dadosProcesso, session_id=idSessao)
 ```
 
-- **Momento de Execução:** Executada imediatamente antes de `agent.ainvoke()`.
-- **Efeito:** Garante que o estado do grafo (`dados_processo` em `AgentState`) e as mensagens injetadas no prompt pelo `build_message()` contenham exclusivamente valores cifrados.
+- **Momento de Execução:** Executadas em `executarPipelineAgente()` imediatamente antes de `agent.ainvoke()`, compartilhando o mesmo `idSessao`.
+- **Efeito:** Garante que a mensagem do usuário e o estado `dados_processo` enviados ao LLM contenham exclusivamente placeholders curtos e consistentes entre turnos, enquanto o `CofreAnonimizacao` da sessão guarda apenas os valores cifrados em AES.
+- **Orientação no Prompt:** O `SYSTEM_PROMPT` instrui o modelo a reproduzir os placeholders `[TIPO_N]` exatamente como aparecem (sem envolver em `{}` e sem alterar caracteres).
 
-### 6.2. `transformarDadosProcessoOut(message: Any) -> Any`
+### 6.2. `transformarDadosProcessoOut` e `excluirSessao`
 
 ```python
-def transformarDadosProcessoOut(message: Any) -> Any:
-    """Restaura dados sensíveis criptografados presentes na resposta do agente/LLM."""
+def transformarDadosProcessoOut(message: Any, idSessao: str | None = None) -> Any:
+    """Restaura dados sensíveis presentes na resposta do agente/LLM."""
     if not isinstance(message, str):
         return message
 
-    return desanonimizar_texto(message)
+    return desanonimizar_texto(message, session_id=idSessao)
 ```
 
-- **Momento de Execução:** Executada logo após extrair o conteúdo textual da última mensagem retornada pelo modelo (`mensagens[-1].content`).
-- **Efeito:** Restaura os dados reais para compor o `ChatResponse` final que será enviado ao cliente da API.
+- **Momento de Execução:** `transformarDadosProcessoOut()` é executada logo após extrair o conteúdo textual da última mensagem retornada pelo modelo (`mensagens[-1].content`), utilizando o cofre da sessão `idSessao`.
+- **Limpeza de Sessão:** Ao chamar `excluirSessao(idSessao)` (via `DELETE /api/v1/chat/{session_id}` ou `/limpar` no `run_local.py`), além de remover a thread no `InMemorySaver`, o sistema invoca `limpar_cofre_sessao(idSessao)` para descartar o cofre criptográfico da sessão.
 
 ---
 
@@ -299,7 +317,7 @@ class Settings(BaseSettings):
 
 ## 8. Verificação e Testes Unitários
 
-A integridade de todas as rotinas é validada através do arquivo de testes [`tests/test_anonymizer.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/tests/test_anonymizer.py):
+A integridade de todas as rotinas é validada através dos arquivos [`tests/test_anonymizer.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/tests/test_anonymizer.py) e [`tests/test_service.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/tests/test_service.py):
 
 | Teste | O que valida |
 | :--- | :--- |
@@ -310,8 +328,11 @@ A integridade de todas as rotinas é validada através do arquivo de testes [`te
 | `test_reconhecedor_razao_social` | Detecção de nomes empresariais com sufixos `Ltda.` e `S.A.`. |
 | `test_reconhecedor_cnj` | Detecção e validação matemática por Módulo 97 de processos judiciais. |
 | `test_anonimizacao_reversivel_e_desanonimizacao_texto` | Garante que `desanonimizar(anonimizar(texto)) == texto`. |
-| `test_anonimizar_dados_processo_dicionario` | Travessia de dicionários aninhados preservando campos booleanos e numéricos e cifrando apenas strings. |
+| `test_anonimizar_dados_processo_dicionario` | Travessia de dicionários aninhados preservando campos booleanos e numéricos e mascarando apenas strings. |
 | `test_transformar_dados_processo_in_e_out` | Fluxo completo de ponta a ponta simulando a resposta do LLM e a restauração. |
+| `test_placeholders_curtos_e_reutilizacao_na_mesma_sessao` | Geração de placeholders curtos (`[TIPO_N]`), reutilização determinística em listas repetidas, armazenamento apenas cifrado no cofre e limpeza da sessão. |
+| `test_isolamento_entre_sessoes_e_fallback_aes_direto` | Isolamento completo entre sessões diferentes e compatibilidade retroativa com tokens AES-CBC diretos (incluindo itálico Markdown). |
+| `test_pipeline_reutiliza_placeholder_entre_turnos_e_limpa_ao_excluir_sessao` | Reutilização de placeholders entre `dados_processo` e turnos seguintes da mesma sessão e limpeza automática via `excluirSessao()`. |
 
 ### Como Executar os Testes:
 
