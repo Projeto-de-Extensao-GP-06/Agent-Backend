@@ -12,10 +12,14 @@ from src.app.services.anonymizer.recognizers import (
     RgRecognizer,
 )
 from src.app.services.anonymizer.service import (
+    PLACEHOLDER_PATTERN,
+    CofreAnonimizacao,
     anonimizar_dados_processo,
     anonimizar_texto,
     desanonimizar_texto,
     extrair_termos_sensiveis_processo,
+    limpar_cofre_sessao,
+    obter_cofre_sessao,
 )
 
 __all__ = [
@@ -28,6 +32,10 @@ __all__ = [
     "get_analyzer_engine",
     "get_anonymizer_engine",
     "get_deanonymize_engine",
+    "CofreAnonimizacao",
+    "PLACEHOLDER_PATTERN",
+    "obter_cofre_sessao",
+    "limpar_cofre_sessao",
     "anonimizar_texto",
     "anonimizar_dados_processo",
     "desanonimizar_texto",

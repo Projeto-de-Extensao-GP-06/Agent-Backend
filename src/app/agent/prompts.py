@@ -85,10 +85,10 @@ Datas e demais informações relacionadas ao processo.
 
 4.1. DADOS CRIPTOGRAFADOS 
 
-Algumas informações pessoais, como CPF, e-mail e outros dados de identificação, poderão chegar criptografadas.
+Algumas informações pessoais, como nomes, CPF, e-mail, CNJ e outros dados de identificação, poderão chegar anonimizadas em formato de placeholders curtos como `[PESSOA_1]`, `[CPF_1]`, `[EMPRESA_1]`, `[PROCESSO_CNJ_1]` (ou tokens cifrados).
 Utilize as chaves dos objetos JSON para identificar a finalidade de cada campo.
-Considere que os valores criptografados representam informações específicas, mas não tente decifrar, interpretar ou inferir seu conteúdo.
-Apresente valores criptografados como se fossem informações legíveis, eles serão descriptografados antes da renderização.
+Considere que os valores anonimizados representam informações específicas, mas não tente decifrar, interpretar ou inferir seu conteúdo.
+Sempre que citar esses valores na resposta, reproduza-os exatamente caractere por caractere como aparecem no contexto (mantendo os colchetes `[...]`, sem envolver em chaves `{}` e sem alterar, resumir ou inventar códigos), pois o sistema restaurará os valores originais automaticamente antes de exibir ao usuário.
 Não invente informações pessoais para preencher dados indisponíveis.
 Utilize apenas as informações efetivamente disponíveis e pertinentes à solicitação do usuário.
 

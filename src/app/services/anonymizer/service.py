@@ -1,6 +1,9 @@
 from collections.abc import Sequence
+import hashlib
+import hmac
 import logging
 import re
+from threading import Lock
 from typing import Any
 
 from presidio_analyzer import Pattern, PatternRecognizer, RecognizerResult
@@ -16,8 +19,35 @@ from src.app.services.anonymizer.engine import (
 
 logger = logging.getLogger(__name__)
 
-# Padrão de regex para identificar tokens criptografados com AESCipher (Base64 URL-safe >= 43 chars)
+# Padrão de regex para identificar placeholders curtos gerados pelo cofre de anonimização (ex: [PESSOA_1], [CPF_1])
+PLACEHOLDER_PATTERN = re.compile(r"\[[A-Z][A-Z0-9_]*_\d+\]")
+
+# Padrão de regex legado/fallback para identificar tokens criptografados diretamente com AESCipher (Base64 URL-safe >= 43 chars)
 ENCRYPTED_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43,}={0,2}")
+
+# Mapeamento de entidades do Presidio para prefixos curtos e legíveis para o LLM
+ENTITY_PREFIX_MAP: dict[str, str] = {
+    "PERSON": "PESSOA",
+    "PER": "PESSOA",
+    "BR_CPF": "CPF",
+    "BR_CNPJ": "CNPJ",
+    "BR_RG": "RG",
+    "PHONE_NUMBER": "TELEFONE",
+    "BR_RAZAO_SOCIAL": "EMPRESA",
+    "BR_CNJ": "PROCESSO_CNJ",
+    "EMAIL_ADDRESS": "EMAIL",
+    "LOCATION": "LOCAL",
+    "LOC": "LOCAL",
+    "ORGANIZATION": "ORGANIZACAO",
+    "ORG": "ORGANIZACAO",
+    "DATE_TIME": "DATA",
+    "CREDIT_CARD": "CARTAO",
+    "IP_ADDRESS": "IP",
+    "IBAN_CODE": "IBAN",
+    "NRP": "ENTIDADE",
+    "URL": "URL",
+    "SISTEMA_PII": "ENTIDADE",
+}
 
 # Entidades determinísticas/estruturadas ativas por padrão (desativa o NER aberto do spaCy
 # como PERSON, LOCATION, NRP e DATE_TIME para evitar falsos positivos em siglas como "LGPD", "TJSP", "SAJ")
@@ -201,6 +231,136 @@ def _normalizar_chave(chave: str) -> str:
     return re.sub(r"[^a-z0-9]", "", chave.lower())
 
 
+def _obter_prefixo_entidade(entity_type: str) -> str:
+    """Converte o tipo de entidade do Presidio em um prefixo curto para placeholder."""
+    prefixo = ENTITY_PREFIX_MAP.get(entity_type)
+    if prefixo:
+        return prefixo
+    normalizado = re.sub(r"[^A-Z0-9_]", "_", entity_type.upper()).strip("_")
+    return normalizado or "DADO"
+
+
+def _obter_prefixo_campo(chave_norm: str) -> str:
+    """Define um prefixo semântico curto para campos cifrados diretamente pelo schema."""
+    if "cpf" in chave_norm:
+        return "CPF"
+    if "cnpj" in chave_norm:
+        return "CNPJ"
+    if chave_norm == "rg":
+        return "RG"
+    if "telefone" in chave_norm or "celular" in chave_norm:
+        return "TELEFONE"
+    if "email" in chave_norm:
+        return "EMAIL"
+    if "cnj" in chave_norm or "processo" in chave_norm:
+        return "PROCESSO_CNJ"
+    if "empresa" in chave_norm or "reclamado" in chave_norm:
+        return "EMPRESA"
+    if chave_norm.endswith("id") or chave_norm == "id":
+        return "ID"
+    if any(
+        termo in chave_norm
+        for termo in ("nome", "razao", "responsavel", "usuario", "autor", "alteradopor", "modificadopor", "criadopor")
+    ):
+        return "PESSOA"
+    return "DADO"
+
+
+class CofreAnonimizacao:
+    """
+    Cofre por sessão/contexto que associa placeholders curtos e determinísticos
+    (ex: [PESSOA_1], [CPF_1]) aos respectivos valores cifrados em AES-CBC.
+
+    Nenhum dado sensível em texto claro é armazenado neste cofre: o mapeamento
+    guarda apenas `placeholder -> token_aes_cifrado` e um resumo HMAC-SHA256
+    para garantir que valores idênticos recebam o mesmo placeholder na sessão.
+    """
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._placeholders: dict[str, str] = {}
+        self._hash_to_placeholder: dict[str, str] = {}
+        self._counters: dict[str, int] = {}
+
+    @staticmethod
+    def _calcular_hash_dedup(plain_text: str, key_bytes: bytes) -> str:
+        normalizado = plain_text.strip().lower().encode("utf-8")
+        return hmac.new(key_bytes, normalizado, hashlib.sha256).hexdigest()
+
+    def obter_existente(self, plain_text: str, key_bytes: bytes) -> str | None:
+        """Retorna placeholder já registrado para o mesmo valor nesta sessão, se houver."""
+        dedup_key = self._calcular_hash_dedup(plain_text, key_bytes)
+        with self._lock:
+            return self._hash_to_placeholder.get(dedup_key)
+
+    def registrar(
+        self,
+        entity_type: str,
+        plain_text: str,
+        aes_token: str,
+        key_bytes: bytes,
+        prefixo_override: str | None = None,
+    ) -> str:
+        """Registra (ou reutiliza) um placeholder curto para uma entidade cifrada."""
+        prefixo = prefixo_override or _obter_prefixo_entidade(entity_type)
+        dedup_key = self._calcular_hash_dedup(plain_text, key_bytes)
+
+        with self._lock:
+            existente = self._hash_to_placeholder.get(dedup_key)
+            if existente is not None:
+                return existente
+
+            proximo_indice = self._counters.get(prefixo, 0) + 1
+            self._counters[prefixo] = proximo_indice
+            placeholder = f"[{prefixo}_{proximo_indice}]"
+
+            self._hash_to_placeholder[dedup_key] = placeholder
+            self._placeholders[placeholder] = aes_token
+            return placeholder
+
+    def obter_token_cifrado(self, placeholder: str) -> str | None:
+        """Retorna o token AES criptografado associado a um placeholder, se existir."""
+        with self._lock:
+            return self._placeholders.get(placeholder)
+
+    def exportar_mapa(self) -> dict[str, str]:
+        """Retorna cópia do mapa `placeholder -> token_aes_cifrado` (sem texto claro)."""
+        with self._lock:
+            return dict(self._placeholders)
+
+
+_session_vaults_lock = Lock()
+_session_vaults: dict[str, CofreAnonimizacao] = {}
+_default_vault = CofreAnonimizacao()
+
+
+def obter_cofre_sessao(session_id: str) -> CofreAnonimizacao:
+    """Obtém ou cria o cofre de anonimização isolado para uma sessão."""
+    with _session_vaults_lock:
+        cofre = _session_vaults.get(session_id)
+        if cofre is None:
+            cofre = CofreAnonimizacao()
+            _session_vaults[session_id] = cofre
+        return cofre
+
+
+def limpar_cofre_sessao(session_id: str) -> bool:
+    """Remove o cofre de anonimização associado a uma sessão."""
+    with _session_vaults_lock:
+        return _session_vaults.pop(session_id, None) is not None
+
+
+def _resolver_cofre(
+    session_id: str | None = None,
+    cofre: CofreAnonimizacao | None = None,
+) -> CofreAnonimizacao:
+    if cofre is not None:
+        return cofre
+    if session_id:
+        return obter_cofre_sessao(session_id)
+    return _default_vault
+
+
 def _is_encrypted_token(texto: str, key_bytes: bytes) -> bool:
     """Verifica se uma string já é um token AES válido gerado por esta chave."""
     texto_limpo = texto.strip()
@@ -213,27 +373,47 @@ def _is_encrypted_token(texto: str, key_bytes: bytes) -> bool:
         return False
 
 
-def _cifrar_com_mapa(
+def _is_placeholder(texto: str, cofre: CofreAnonimizacao) -> bool:
+    """Verifica se uma string já é um placeholder registrado no cofre ativo."""
+    texto_limpo = texto.strip()
+    return (
+        bool(PLACEHOLDER_PATTERN.fullmatch(texto_limpo))
+        and cofre.obter_token_cifrado(texto_limpo) is not None
+    )
+
+
+def _cifrar_com_cofre(
     texto: str,
     key_bytes: bytes,
+    cofre: CofreAnonimizacao,
+    prefixo: str = "DADO",
     mapa_tokens: dict[str, str] | None = None,
 ) -> str:
-    """Cifra um texto com AES-CBC, reutilizando o token se o mesmo valor já tiver sido cifrado no mapa."""
+    """Cifra um texto com AES-CBC, registra no cofre e retorna um placeholder curto reutilizável."""
     texto_limpo = texto.strip()
     if not texto_limpo:
         return texto
 
-    if _is_encrypted_token(texto_limpo, key_bytes):
+    if _is_placeholder(texto_limpo, cofre) or _is_encrypted_token(texto_limpo, key_bytes):
         return texto_limpo
 
-    chave_mapa = texto_limpo.lower()
-    if mapa_tokens is not None and chave_mapa in mapa_tokens:
-        return mapa_tokens[chave_mapa]
+    existente = cofre.obter_existente(texto_limpo, key_bytes)
+    if existente is not None:
+        if mapa_tokens is not None:
+            mapa_tokens[texto_limpo.lower()] = existente
+        return existente
 
     token = AESCipher.encrypt(key=key_bytes, text=texto_limpo)
+    placeholder = cofre.registrar(
+        entity_type=prefixo,
+        plain_text=texto_limpo,
+        aes_token=token,
+        key_bytes=key_bytes,
+        prefixo_override=prefixo,
+    )
     if mapa_tokens is not None:
-        mapa_tokens[chave_mapa] = token
-    return token
+        mapa_tokens[texto_limpo.lower()] = placeholder
+    return placeholder
 
 
 def _criar_reconhecedor_termos_sistema(termos: Sequence[str]) -> PatternRecognizer | None:
@@ -328,10 +508,13 @@ def anonimizar_texto(
     key: str | None = None,
     termos_conhecidos: Sequence[str] | None = None,
     mapa_tokens: dict[str, str] | None = None,
+    session_id: str | None = None,
+    cofre: CofreAnonimizacao | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """
-    Analisa e anonimiza o texto utilizando criptografia reversível AES.
-    Limita a detecção apenas a entidades estruturadas/validadas (CPF, CNPJ, RG, Telefone, E-mail,
+    Analisa e anonimiza o texto substituindo PII por placeholders curtos (ex: [PESSOA_1], [CPF_1])
+    e armazenando o respectivo valor cifrado em AES-CBC no cofre da sessão.
+    Limita a detecção a entidades estruturadas/validadas (CPF, CNPJ, RG, Telefone, E-mail,
     CNJ, Razão Social) e aos termos sensíveis conhecidos do processo (`termos_conhecidos`),
     evitando que siglas (como 'LGPD', 'TJSP', 'SAJ') ou palavras comuns sejam censuradas.
     """
@@ -340,8 +523,9 @@ def anonimizar_texto(
 
     encryption_key = key or settings.anonymization_key
     key_bytes = encryption_key.encode("utf-8")
+    cofre_ativo = _resolver_cofre(session_id=session_id, cofre=cofre)
 
-    if _is_encrypted_token(texto, key_bytes):
+    if _is_placeholder(texto, cofre_ativo) or _is_encrypted_token(texto, key_bytes):
         return texto, []
 
     analyzer = get_analyzer_engine()
@@ -370,11 +554,11 @@ def anonimizar_texto(
     if results:
         results_filtrados: list[RecognizerResult] = []
         for r in results:
-            trecho = texto[r.start : r.end]
+            trecho = texto[r.start:r.end]
             trecho_normalizado = trecho.strip(" ,.!?:;\"'()[]{}").lower()
             if trecho_normalizado in IGNORAR_ENTIDADES:
                 continue
-            if _is_encrypted_token(trecho, key_bytes):
+            if _is_placeholder(trecho, cofre_ativo) or _is_encrypted_token(trecho, key_bytes):
                 continue
             results_filtrados.append(r)
         results = results_filtrados
@@ -383,10 +567,7 @@ def anonimizar_texto(
         return texto, []
 
     operators = {
-        "DEFAULT": OperatorConfig(
-            "custom",
-            {"lambda": lambda span_text: _cifrar_com_mapa(span_text, key_bytes, mapa_tokens)},
-        )
+        "DEFAULT": OperatorConfig("encrypt", {"key": encryption_key})
     }
 
     anonymized = anonymizer.anonymize(
@@ -395,29 +576,62 @@ def anonimizar_texto(
         operators=operators,
     )
 
-    items = [
-        {
-            "start": item.start,
-            "end": item.end,
-            "entity_type": item.entity_type,
-            "text": item.text,
-            "operator": "encrypt",
-        }
-        for item in anonymized.items
-    ]
+    if not anonymized.items:
+        return anonymized.text, []
 
-    return anonymized.text, items
+    sorted_items = sorted(anonymized.items, key=lambda x: (x.start, x.end))
+
+    partes: list[str] = []
+    itens_saida: list[dict[str, Any]] = []
+    cursor = 0
+    offset_atual = 0
+
+    for item in sorted_items:
+        partes.append(anonymized.text[cursor:item.start])
+        offset_atual += item.start - cursor
+
+        aes_token = item.text
+        plain_text = AESCipher.decrypt(key=key_bytes, text=aes_token)
+        placeholder = cofre_ativo.registrar(
+            entity_type=item.entity_type,
+            plain_text=plain_text,
+            aes_token=aes_token,
+            key_bytes=key_bytes,
+        )
+        if mapa_tokens is not None:
+            mapa_tokens[plain_text.strip().lower()] = placeholder
+
+        inicio_placeholder = offset_atual
+        partes.append(placeholder)
+        offset_atual += len(placeholder)
+
+        itens_saida.append(
+            {
+                "start": inicio_placeholder,
+                "end": offset_atual,
+                "entity_type": item.entity_type,
+                "text": placeholder,
+                "operator": "placeholder_aes",
+            }
+        )
+        cursor = item.end
+
+    partes.append(anonymized.text[cursor:])
+    return "".join(partes), itens_saida
 
 
 def anonimizar_dados_processo(
     dados: dict[str, Any] | None,
     key: str | None = None,
     mapa_tokens: dict[str, str] | None = None,
+    session_id: str | None = None,
+    cofre: CofreAnonimizacao | None = None,
 ) -> dict[str, Any] | None:
     """
     Anonimiza seletivamente a estrutura `dados_processo` de acordo com o schema do SGPJ:
-    - Cifra integralmente campos de identificação das partes e do processo (ex: `clientNomeRazaoSocial`,
-      `clienteId`, `usuarioResponsavelNome`, `usuarioResponsavelId`, `numeroCnj`, autor em `historicoProcessoResponses`).
+    - Cifra e substitui por placeholders curtos campos de identificação das partes e do processo
+      (ex: `clientNomeRazaoSocial`, `clienteId`, `usuarioResponsavelNome`, `usuarioResponsavelId`,
+      `numeroCnj`, autor em `historicoProcessoResponses`).
     - Analisa via Presidio apenas os campos de texto livre (`descricaoCaso`, `obervacao`/`observacao`, `ultimoMovimento`).
     - Preserva intactos os metadados de sistema/tribunal (`prioridade`, `faseProcesso`, `status`, `siglaTribunal`,
       `sistemaTribunal`, `classeProcessual`, `assunto`, `orgaoJulgador`, datas e `valorCausa`).
@@ -427,9 +641,7 @@ def anonimizar_dados_processo(
 
     encryption_key = key or settings.anonymization_key
     key_bytes = encryption_key.encode("utf-8")
-    tokens_cache: dict[str, str] = mapa_tokens if mapa_tokens is not None else {}
-
-    # 1. Extrai previamente os nomes/termos sensíveis do próprio processo
+    cofre_ativo = _resolver_cofre(session_id=session_id, cofre=cofre)
     termos_conhecidos = extrair_termos_sensiveis_processo(dados)
 
     def _eh_campo_cifrar_direto(chave_norm: str, pai_norm: str) -> bool:
@@ -469,7 +681,7 @@ def anonimizar_dados_processo(
                 for item in valor
             ]
 
-        # 4. Campos de identificação direta (clientNomeRazaoSocial, clienteId, usuarioResponsavelNome, usuarioResponsavelId, numeroCnj, etc.)
+        # 4. Campos de identificação direta
         if _eh_campo_cifrar_direto(chave_norm, pai_norm):
             if valor is None or isinstance(valor, bool):
                 return valor
@@ -477,16 +689,24 @@ def anonimizar_dados_processo(
                 texto_val = str(valor).strip()
                 if not texto_val:
                     return valor
-                return _cifrar_com_mapa(texto_val, key_bytes, tokens_cache)
+                return _cifrar_com_cofre(
+                    texto_val,
+                    key_bytes=key_bytes,
+                    cofre=cofre_ativo,
+                    prefixo=_obter_prefixo_campo(chave_norm),
+                    mapa_tokens=mapa_tokens,
+                )
             return valor
 
-        # 5. Campos de texto livre (descricaoCaso, obervacao, ultimoMovimento, etc.)
+        # 5. Campos de texto livre
         if isinstance(valor, str):
             texto_anonimizado, _ = anonimizar_texto(
                 valor,
                 key=encryption_key,
                 termos_conhecidos=termos_conhecidos,
-                mapa_tokens=tokens_cache,
+                mapa_tokens=mapa_tokens,
+                session_id=session_id,
+                cofre=cofre_ativo,
             )
             return texto_anonimizado
 
@@ -495,37 +715,78 @@ def anonimizar_dados_processo(
     return _anonimizar_recursivo(dados)
 
 
-def desanonimizar_texto(texto: str, key: str | None = None) -> str:
-    """
-    Identifica tokens criptografados presentes no texto (ex: gerados pelo LLM)
-    e restaura os dados originais através do DeanonymizeEngine e AESCipher.
-    """
-    if not texto or not isinstance(texto, str):
-        return texto
+def _restaurar_placeholders(
+    texto: str,
+    key_bytes: bytes,
+    cofre: CofreAnonimizacao,
+) -> str:
+    """Restaura placeholders curtos (ex: [PESSOA_1]) consultando os tokens AES no cofre."""
+    def _substituir(match: re.Match[str]) -> str:
+        placeholder = match.group(0)
+        aes_token = cofre.obter_token_cifrado(placeholder)
+        if aes_token is None:
+            return placeholder
+        try:
+            return AESCipher.decrypt(key=key_bytes, text=aes_token)
+        except Exception as e:
+            logger.error("Erro ao decifrar placeholder %s do cofre: %s", placeholder, e)
+            return placeholder
 
-    encryption_key = key or settings.anonymization_key
+    return PLACEHOLDER_PATTERN.sub(_substituir, texto)
+
+
+def _extrair_span_aes_valido(
+    token: str,
+    start: int,
+    end: int,
+    key_bytes: bytes,
+) -> tuple[int, int] | None:
+    """
+    Valida se `token` (ou sua subcadeia sem delimitadores `_`/`-` adjacentes, ex: itálico Markdown)
+    é decifrável com a chave AES e retorna o intervalo (start, end) correspondente.
+    """
+    candidatos = [(0, 0)]
+    if token.startswith(("_", "-")) and token.endswith(("_", "-")):
+        candidatos.append((1, 1))
+    if token.startswith(("_", "-")):
+        candidatos.append((1, 0))
+    if token.endswith(("_", "-")):
+        candidatos.append((0, 1))
+
+    for corte_esq, corte_dir in candidatos:
+        fim_rel = len(token) - corte_dir
+        if fim_rel <= corte_esq:
+            continue
+        sub = token[corte_esq:fim_rel]
+        try:
+            AESCipher.decrypt(key=key_bytes, text=sub)
+            return start + corte_esq, end - corte_dir
+        except Exception:
+            continue
+
+    return None
+
+
+def _restaurar_tokens_aes_diretos(texto: str, encryption_key: str) -> str:
+    """Fallback para restaurar tokens AES-CBC presentes diretamente no texto."""
     key_bytes = encryption_key.encode("utf-8")
     matches = list(ENCRYPTED_TOKEN_PATTERN.finditer(texto))
-
     if not matches:
         return texto
 
     entities: list[OperatorResult] = []
     for m in matches:
         token = m.group()
-        try:
-            # Valida se o token é decifrável pela chave AES
-            AESCipher.decrypt(key=key_bytes, text=token)
+        span = _extrair_span_aes_valido(token, m.start(), m.end(), key_bytes)
+        if span is not None:
             entities.append(
-                OperatorResult(
-                    start=m.start(),
-                    end=m.end(),
-                    entity_type="ENCRYPTED_PII",
-                )
+                OperatorResult(start=span[0], end=span[1], entity_type="ENCRYPTED_PII")
             )
-        except Exception:
-            # Se não decifrar, é apenas uma palavra normal ou token não gerado por esta chave
-            continue
+        elif token.endswith("="):
+            logger.warning(
+                "Candidato a token AES não pôde ser decifrado (possível token alterado): %s...",
+                token[:12],
+            )
 
     if not entities:
         return texto
@@ -545,3 +806,24 @@ def desanonimizar_texto(texto: str, key: str | None = None) -> str:
     except Exception as e:
         logger.error("Erro ao desanonimizar texto com o DeanonymizeEngine: %s", e)
         return texto
+
+
+def desanonimizar_texto(
+    texto: str,
+    key: str | None = None,
+    session_id: str | None = None,
+    cofre: CofreAnonimizacao | None = None,
+) -> str:
+    """
+    Restaura placeholders curtos presentes no texto (via cofre da sessão + AESCipher)
+    e mantém compatibilidade com tokens AES-CBC diretos.
+    """
+    if not texto or not isinstance(texto, str):
+        return texto
+
+    encryption_key = key or settings.anonymization_key
+    key_bytes = encryption_key.encode("utf-8")
+    cofre_ativo = _resolver_cofre(session_id=session_id, cofre=cofre)
+
+    texto_restaurado = _restaurar_placeholders(texto, key_bytes=key_bytes, cofre=cofre_ativo)
+    return _restaurar_tokens_aes_diretos(texto_restaurado, encryption_key=encryption_key)
