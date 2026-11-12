@@ -243,18 +243,21 @@ class RazaoSocialRecognizer(PatternRecognizer):
     """
     LEGAL_SUFFIXES = (
         r"(?:LTDA\.?|Ltda\.?|LIMITADA|Limitada|"
-        r"S\.?A\.?|S/A|EIRELI|Eireli|M\.?E\.?|ME|E\.?P\.?P\.?|EPP|"
-        r"MEI|Mei|S/?S|SPE|CIA\.?|Cia\.?|COMPANHIA|Companhia|HOLDING|Holding)"
+        r"S\.A\.|S/A|EIRELI|Eireli|M\.E\.|E\.P\.P\.|EPP|"
+        r"MEI|S/S|SPE|CIA\.?|Cia\.?|COMPANHIA|Companhia|HOLDING|Holding)"
     )
     WORD = r"(?:[A-ZÀ-Ú][a-zà-ú0-9]+|[A-ZÀ-Ú0-9]{2,})"
-    CONNECTOR = r"(?:de|da|do|dos|das|e|em|para|com|&|\-)"
-    START_IGNORE = r"(?!Contrato\b|Empresa\b|Fornecedor\b|Cliente\b|Entre\b|Pela\b|Pelo\b|Com\b)"
+    CONNECTOR = r"(?:de|da|do|dos|das|e|&|\-)"
+    START_IGNORE = (
+        r"(?!Contrato\b|Empresa\b|Fornecedor\b|Cliente\b|Entre\b|Pela\b|Pelo\b|"
+        r"Com\b|Contra\b|Sobre\b|Para\b|Ação\b|Acao\b|Processo\b)"
+    )
 
     PATTERNS = [
-        # Razão social com tipo societário obrigatório (ex: Silva & Souza Transportes Ltda., Acme S.A.)
+        # Razão social com tipo societário obrigatório (case-sensitive via ?-i para exigir iniciais maiúsculas)
         Pattern(
             name="razao_social_sufixo",
-            regex=rf"\b{START_IGNORE}{WORD}(?:\s+(?:{WORD}|{CONNECTOR})){{1,8}}\s+{LEGAL_SUFFIXES}(?!\w)",
+            regex=rf"(?-i:\b{START_IGNORE}{WORD}(?:\s+(?:{WORD}|{CONNECTOR})){{1,8}}\s+{LEGAL_SUFFIXES})(?!\w)",
             score=0.90,
         ),
     ]

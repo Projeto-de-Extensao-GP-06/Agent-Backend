@@ -206,25 +206,23 @@ Arquivo: [`src/app/services/anonymizer/service.py`](file:///C:/Users/leona/OneDr
 
 Contém a lógica de negócio para aplicar a anonimização e desanonimização nos dados que trafegam pelo agente.
 
-### 5.1. `anonimizar_texto(texto: str, key: str | None = None) -> tuple[str, list[dict[str, Any]]]`
+### 5.1. `anonimizar_texto(texto: str, key: str | None = None, termos_conhecidos: Sequence[str] | None = None, mapa_tokens: dict[str, str] | None = None)`
 
-- **Entrada:** String de texto contendo dados sensíveis em texto claro e chave AES opcional.
+- **Entrada:** String de texto contendo dados sensíveis em texto claro, chave AES opcional, lista de termos sensíveis extraídos do processo (`termos_conhecidos`) e mapa de reaproveitamento de tokens (`mapa_tokens`).
 - **Processamento:**
-  1. Invoca `analyzer.analyze(text=texto, language="pt")` (com fallback para `"en"`).
-  2. Se encontrar entidades, configura o operador `OperatorConfig("encrypt", {"key": encryption_key})`.
-  3. Executa `anonymizer.anonymize()`, que substitui cada dado sensível pelo token criptografado correspondente.
+  1. Restringe a análise exclusivamente a entidades estruturadas/validadas (`ENTIDADES_PADRAO_SISTEMA`: `BR_CPF`, `BR_CNPJ`, `BR_RG`, `PHONE_NUMBER`, `EMAIL_ADDRESS`, `BR_CNJ`, `BR_RAZAO_SOCIAL`), desativando o NER aberto do spaCy (`PERSON`, `LOCATION`, `NRP`, `DATE_TIME`) para eliminar falsos positivos em siglas como `"LGPD"`, `"SAJ"`, `"TJSP"`.
+  2. Quando `termos_conhecidos` é fornecido, injeta um `PatternRecognizer` dinâmico (`ad_hoc_recognizers`) com os nomes reais e identificadores extraídos do processo (`SISTEMA_PII`).
+  3. Executa `anonymizer.anonymize()` utilizando `_cifrar_com_mapa`, garantindo que ocorrências repetidas do mesmo dado recebam o mesmo token cifrado dentro da sessão.
 - **Saída:** Tupla com o texto cifrado e a lista de dicionários contendo metadados de cada entidade cifrada (`start`, `end`, `entity_type`, `text`, `operator`).
 
-### 5.2. `anonimizar_dados_processo(dados: dict[str, Any] | None, key: str | None = None) -> dict[str, Any] | None`
+### 5.2. `anonimizar_dados_processo(dados: dict[str, Any] | None, key: str | None = None, mapa_tokens: dict[str, str] | None = None) -> dict[str, Any] | None`
 
-- **Entrada:** Dicionário com informações contextuais do processo (payload `dados_processo`).
-- **Processamento:**
-  - Executa uma **travessia recursiva** sobre a estrutura de dados:
-    - Se for um `dict`, itera sobre todas as chaves e processa seus valores.
-    - Se for uma `list`, itera sobre cada item da lista.
-    - Se for uma `str`, invoca `anonimizar_texto(valor)` e substitui o valor pelo texto criptografado.
-    - Se for de tipo primitivo (`int`, `float`, `bool`, `None`), mantém o valor intacto.
-- **Saída:** Novo dicionário idêntico na sua hierarquia, com todos os campos de texto devidamente protegidos e cifrados.
+- **Entrada:** Dicionário com informações contextuais do processo no schema do SGPJ (payload `dados_processo`).
+- **Processamento guiado pelo Schema (Key-Aware):**
+  - **Cifrados integralmente (`CAMPOS_CIFRAR_DIRETO`):** `clientNomeRazaoSocial`, `clienteId`, `usuarioResponsavelNome`, `usuarioResponsavelId`, `numeroCnj` e campos de autoria em `historicoProcessoResponses`.
+  - **Analisados como texto livre (`CAMPOS_TEXTO_LIVRE`):** `descricaoCaso`, `obervacao` (`observacao`) e `ultimoMovimento` — aplica `anonimizar_texto()` com os padrões determinísticos e os nomes das partes extraídos do próprio processo.
+  - **Preservados em texto claro (`CAMPOS_PRESERVADOS`):** `valorCausa`, `prioridade`, `faseProcesso`, `status`, `dataAudiencia`, `dataHoraInicio`, `ultimaAtualizacao`, `siglaTribunal`, `tribunalTramitacao`, `instancia`, `dataAjuizamento`, `nivelSigilo`, `classeProcessual`, `formato`, `sistemaTribunal`, `orgaoJulgador`, `assunto` e datas/tipos de atualização em `historicoProcessoResponses`.
+- **Saída:** Novo dicionário idêntico na sua hierarquia, com apenas os dados sensíveis das partes e do processo cifrados e todos os metadados processuais intactos para o LLM.
 
 ### 5.3. `desanonimizar_texto(texto: str, key: str | None = None) -> str`
 
