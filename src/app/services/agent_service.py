@@ -15,6 +15,15 @@ from src.app.services.anonymizer import (
     obter_cofre_sessao,
 )
 
+from src.app.services.guardrails import (
+    GuardrailViolation,
+    aviso_bloqueio_entrada,
+    aviso_bloqueio_saida,
+    validar_entrada,
+    validar_saida,
+    validar_saida_segura,
+)
+
 agent = criarAgente()
 
 # Cache em memória por sessão para reaproveitar termos sensíveis e tokens do processo entre turnos
@@ -78,23 +87,46 @@ async def executarPipelineAgente(
         idSessao=idSessao,
     )
 
-    estado_inicial: dict[str, Any] = {
-        "messages": [HumanMessage(content=mensagemAnonimizada)],
-        "dados_processo": processo,
-    }
-    if timezone:
-        estado_inicial["timezone"] = timezone
+    async def _invocar(conteudo: str) -> tuple[dict[str, Any], list[Any], str]:
+        estado_inicial: dict[str, Any] = {
+            "messages": [HumanMessage(content=conteudo)],
+            "dados_processo": processo,
+        }
+        if timezone:
+            estado_inicial["timezone"] = timezone
 
-    agent_response = await agent.ainvoke(
-        estado_inicial,
-        {"configurable": {"thread_id": idSessao}, "recursion_limit": 10},
-    )
+        resp = await agent.ainvoke(
+            estado_inicial,
+            {"configurable": {"thread_id": idSessao}, "recursion_limit": 10},
+        )
+        msgs = resp.get("messages", [])
+        if not msgs:
+            raise RuntimeError("O assistente nao retornou uma resposta")
+        return resp, msgs, conteudoParaTexto(msgs[-1].content)
 
-    mensagens = agent_response.get("messages", [])
-    if not mensagens:
-        raise RuntimeError("O assistente nao retornou uma resposta")
+    guardrail_acionado: dict[str, str] | None = None
 
-    message = conteudoParaTexto(mensagens[-1].content)
+    # Guardrail de entrada: após a anonimização (Presidio), antes do LLM.
+    # Em caso de violação, o modelo é avisado e responde ao usuário.
+    try:
+        mensagemAnonimizada = validar_entrada(mensagemAnonimizada)
+        conteudo_para_modelo = mensagemAnonimizada
+    except GuardrailViolation as violacao:
+        guardrail_acionado = {"etapa": "entrada", "motivo": str(violacao)}
+        conteudo_para_modelo = aviso_bloqueio_entrada(str(violacao))
+
+    agent_response, mensagens, message = await _invocar(conteudo_para_modelo)
+
+    # Guardrail de saída: sobre a resposta ainda anonimizada, antes da desanonimização
+    if guardrail_acionado is None:
+        try:
+            message = validar_saida(message)
+        except GuardrailViolation as violacao:
+            guardrail_acionado = {"etapa": "saida", "motivo": str(violacao)}
+            agent_response, mensagens, message = await _invocar(
+                aviso_bloqueio_saida(str(violacao))
+            )
+            message = validar_saida_segura(message)
 
     resposta = transformarDadosProcessoOut(message, idSessao=idSessao)
 
@@ -117,6 +149,7 @@ async def executarPipelineAgente(
             "pos_desanonimizacao": resposta,
             "llm_calls": agent_response.get("llm_calls", 1),
             "mensagens": mensagens,
+            "guardrail": guardrail_acionado,
         },
     }
 
