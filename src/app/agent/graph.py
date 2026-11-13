@@ -1,5 +1,7 @@
 import json
+from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
@@ -9,16 +11,54 @@ from langgraph.prebuilt import ToolNode
 from src.app.agent.graph_state import AgentState
 from src.app.agent.prompts import SYSTEM_PROMPT
 
+DEFAULT_TIMEZONE = "America/Sao_Paulo"
+_BRT_FALLBACK = dt_timezone(timedelta(hours=-3), name=DEFAULT_TIMEZONE)
+_DIAS_SEMANA_PT = (
+    "segunda-feira",
+    "terça-feira",
+    "quarta-feira",
+    "quinta-feira",
+    "sexta-feira",
+    "sábado",
+    "domingo",
+)
+
+
+def _obter_contexto_data_hora(tz_name: str | None) -> str:
+    """Retorna data, dia da semana e hora atual no fuso do usuário (fallback America/Sao_Paulo)."""
+    tz_efetivo = (tz_name or "").strip() or DEFAULT_TIMEZONE
+    try:
+        tz: Any = ZoneInfo(tz_efetivo)
+    except ZoneInfoNotFoundError:
+        tz_efetivo = DEFAULT_TIMEZONE
+        try:
+            tz = ZoneInfo(DEFAULT_TIMEZONE)
+        except ZoneInfoNotFoundError:
+            tz = _BRT_FALLBACK
+
+    agora = datetime.now(tz)
+    dia_semana = _DIAS_SEMANA_PT[agora.weekday()]
+    return (
+        f"Data atual: {agora.strftime('%Y-%m-%d')} ({dia_semana}) | "
+        f"Hora atual: {agora.strftime('%H:%M')} | "
+        f"Fuso horário: {tz_efetivo}"
+    )
+
 
 def build_message(state: AgentState) -> list[BaseMessage]:
     """
     Prepara a lista de mensagens a ser enviada ao modelo,
-    injetando o SYSTEM_PROMPT e as informações contextuais de 'dados_processo', se existirem.
+    injetando o SYSTEM_PROMPT, a referência temporal e as informações contextuais de 'dados_processo'.
     """
     mensagens = list(state.get("messages", []))
     dados_processo = state.get("dados_processo")
+    referencia_temporal = _obter_contexto_data_hora(state.get("timezone"))
 
-    instrucoes = SYSTEM_PROMPT
+    instrucoes = (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"--- DATA E HORA ATUAL DE REFERÊNCIA ---\n"
+        f"{referencia_temporal}"
+    )
     if dados_processo:
         try:
             dados_formatados = json.dumps(dados_processo, ensure_ascii=False, indent=2)

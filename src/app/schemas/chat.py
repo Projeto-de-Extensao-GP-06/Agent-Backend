@@ -8,6 +8,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     session_id: str | UUID | None = None
     dados_processo: dict[str, Any] | None = None
+    timezone: str | None = None
 
     @field_validator("message")
     @classmethod
@@ -18,9 +19,17 @@ class ChatRequest(BaseModel):
         return valorNormalizado
 
 
+class IcsAttachment(BaseModel):
+    filename: str
+    title: str
+    content: str
+    mime_type: str = "text/calendar;charset=utf-8"
+
+
 class ResumoResponse(BaseModel):
     response: str
     session_id: str | UUID
+    attachments: list[IcsAttachment] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -35,6 +44,7 @@ class ChatDeleteResponse(BaseModel):
 
 __all__ = [
     "ChatRequest",
+    "IcsAttachment",
     "ResumoResponse",
     "ChatResponse",
     "ChatDeleteResponse",

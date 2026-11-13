@@ -5,6 +5,7 @@ pydantic-settings
 fastapi
 uvicorn
 rich
+tzdata
 presidio-analyzer
 presidio-anonymizer
 python-jose[cryptography]
