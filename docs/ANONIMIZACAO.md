@@ -8,37 +8,42 @@ Este documento descreve detalhadamente o funcionamento, os princípios criptogr�
 
 O objetivo deste módulo é garantir a **privacidade de dados sensíveis (PII)** e a conformidade com a **LGPD (Lei Geral de Proteção de Dados)**, impedindo que informações pessoais e confidenciais de processos jurídicos e clientes sejam enviadas em texto aberto para Provedores de Modelos de Linguagem (LLMs, ex: Google Gemini, OpenAI).
 
-### Anonimização Reversível vs. Irreversível
+### Anonimização Reversível com Placeholders Curtos, Cofre Criptográfico e Schema SGPJ
 
-Ao contrário da anonimização destrutiva (como substituição fixa por `<CPF>` ou máscara `***`), este sistema adota a **anonimização reversível criptográfica**:
+Ao contrário da anonimização destrutiva (como substituição fixa por `<CPF>` ou máscara `***`) e diferente do envio direto de strings Base64 longas ao modelo, este sistema combina **criptografia reversível AES-CBC**, **seleção guiada pelo schema do SGPJ** e **placeholders curtos por sessão** (`[TIPO_N]`):
 
-1. **Entrada (Antes do LLM):** Os dados sensíveis identificados são criptografados com o algoritmo simétrico **AES (Advanced Encryption Standard)** em modo **CBC**, com vetor de inicialização aleatório (**IV de 16 bytes**) e preenchimento **PKCS7**. O resultado é codificado em **Base64 URL-safe**.
-2. **Processamento pelo LLM:** O LLM recebe o contexto estruturado contendo apenas os tokens criptografados (ex: `DJJCE-kyp90LBzgkZu-7Usv0eKfmfSFtvf7CDypv4D4=`). O modelo consegue raciocinar sobre as relações dos dados sem ter acesso ao dado real.
-3. **Saída (Após o LLM):** Quando o LLM cita ou responde mencionando algum dado cifrado, o sistema identifica os tokens na resposta e executa a **desanonimização**, restaurando os valores originais antes de entregá-los ao usuário final na API.
+1. **Entrada (Antes do LLM):**
+   - Em `dados_processo`, apenas campos sensíveis de identificação/partes (`CAMPOS_CIFRAR_DIRETO`) e textos livres (`CAMPOS_TEXTO_LIVRE`) são anonimizados; metadados jurídicos e de sistema (`CAMPOS_PRESERVADOS`, como `valorCausa`, `prioridade`, `faseProcesso`, `siglaTribunal`, `classeProcessual`, `assunto` e datas) permanecem em texto claro.
+   - Em textos livres e na mensagem do usuário, o Presidio restringe a busca a entidades determinísticas/validadas (`ENTIDADES_PADRAO_SISTEMA`) mais um reconhecedor dinâmico (`SISTEMA_PII`) alimentado com os nomes reais extraídos do processo (`extrair_termos_sensiveis_processo`), evitando falsos positivos em siglas como `LGPD`, `SAJ` e `TJSP`.
+   - Cada dado sensível identificado é criptografado com **AES-CBC** (IV aleatório de 16 bytes, padding **PKCS7**, codificação **Base64 URL-safe**), armazenado no **Cofre de Anonimização da sessão (`CofreAnonimizacao`)** e substituído no texto por um placeholder curto e legível (ex.: `[PESSOA_1]`, `[ID_1]`, `[CPF_1]`, `[EMPRESA_1]`, `[PROCESSO_CNJ_1]`). Valores idênticos na mesma sessão recebem um resumo determinístico **HMAC-SHA256** e reutilizam o mesmo placeholder sem jamais armazenar texto claro no cofre.
+2. **Processamento pelo LLM:** O LLM recebe o contexto contendo apenas os placeholders curtos (`[PESSOA_1]`, `[CPF_1]`, etc.). Como são curtos e estruturados, o modelo consegue correlacionar entidades repetidas (ex.: o mesmo responsável em várias entradas de histórico ou entre turnos) e copiá-los fielmente sem risco de corromper ou alucinar caracteres de um Base64 longo.
+3. **Saída (Após o LLM):** Na resposta do modelo, o sistema localiza os placeholders via `PLACEHOLDER_PATTERN`, consulta o respectivo token AES no cofre da sessão, executa a descriptografia (`AESCipher.decrypt`) e restaura os valores originais antes de entregar a resposta na API. Também é mantido um fallback de compatibilidade para descriptografar tokens AES-CBC diretos via `DeanonymizeEngine`.
 
 ```mermaid
 flowchart TD
     subgraph Cliente["1. Camada de Entrada"]
-        Req["Requisição API (/api/v1/chat)"] --> Dados["dados_processo (com PII em texto claro)"]
+        Req["Requisição API (/api/v1/chat)"] --> Dados["mensagem e dados_processo (com PII em texto claro)"]
     end
 
-    subgraph Anonimizacao["2. Pipeline de Anonimização"]
-        Dados --> In["transformarDadosProcessoIn()"]
-        In --> Rec["Identificação via Recognizers Personalizados"]
-        Rec --> Enc["AnonymizerEngine (AES-CBC Encrypt)"]
-        Enc --> DadosAnon["dados_processo Criptografado"]
+    subgraph Anonimizacao["2. Pipeline Schema-Aware + Cofre da Sessão"]
+        Dados --> In["transformarMensagemIn() / transformarDadosProcessoIn()"]
+        In --> Schema["Schema SGPJ (cifra identificação, analisa texto livre, preserva metadados)"]
+        Schema --> Rec["ENTIDADES_PADRAO_SISTEMA + Reconhecedor Dinâmico (SISTEMA_PII)"]
+        Rec --> Enc["AES-CBC Encrypt + AnonymizerEngine"]
+        Enc --> Vault["CofreAnonimizacao (HMAC-SHA256 dedup + placeholder -> AES)"]
+        Vault --> DadosAnon["Texto/JSON com placeholders curtos ([PESSOA_1], [CPF_1])"]
     end
 
     subgraph Agente["3. Camada do Modelo (LLM)"]
         DadosAnon --> Prompt["Injeção no SYSTEM_PROMPT"]
         Prompt --> LLM["Agente LangGraph / Gemini"]
-        LLM --> RespCifrada["Resposta gerada (com tokens cifrados)"]
+        LLM --> RespMask["Resposta gerada (com placeholders [PESSOA_1], ...)"]
     end
 
     subgraph Desanonimizacao["4. Pipeline de Desanonimização"]
-        RespCifrada --> Out["transformarDadosProcessoOut()"]
-        Out --> TokenFinder["Identificação de Tokens Cifrados"]
-        TokenFinder --> Dec["DeanonymizeEngine (AES Decrypt)"]
+        RespMask --> Out["transformarDadosProcessoOut()"]
+        Out --> PlaceholderFinder["Busca por PLACEHOLDER_PATTERN + consulta ao Cofre"]
+        PlaceholderFinder --> Dec["AESCipher.decrypt (e fallback DeanonymizeEngine)"]
         Dec --> RespClara["Resposta final com dados reais restaurados"]
     end
 
@@ -53,10 +58,10 @@ O módulo de anonimização foi organizado em um subpacote dedicado para manter 
 
 ```
 src/app/services/anonymizer/
-├── __init__.py           # Exporta a interface pública limpa do módulo
+├── __init__.py           # Exporta a interface pública limpa do módulo e utilitários do cofre
 ├── recognizers.py        # 6 Recognizers brasileiros com algoritmos de validação
 ├── engine.py             # Configuração e inicialização singleton dos motores Presidio
-└── service.py            # Funções de anonimização recursiva e desanonimização de saída
+└── service.py            # CofreAnonimizacao por sessão, placeholders curtos e fallback AES
 ```
 
 ---
@@ -200,77 +205,99 @@ Implementa o padrão **Singleton com Carregamento Preguiçoso (Lazy Loading)** p
 
 ---
 
-## 5. Serviços de Transformação (`service.py`)
+## 5. Serviços de Transformação e Cofre da Sessão (`service.py`)
 
 Arquivo: [`src/app/services/anonymizer/service.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/src/app/services/anonymizer/service.py)
 
-Contém a lógica de negócio para aplicar a anonimização e desanonimização nos dados que trafegam pelo agente.
+Contém a lógica de negócio para aplicar a anonimização com placeholders curtos, o cofre criptográfico isolado por sessão e a desanonimização na saída do modelo.
 
-### 5.1. `anonimizar_texto(texto: str, key: str | None = None, termos_conhecidos: Sequence[str] | None = None, mapa_tokens: dict[str, str] | None = None)`
+### 5.1. `CofreAnonimizacao` e Gerenciamento por Sessão
 
-- **Entrada:** String de texto contendo dados sensíveis em texto claro, chave AES opcional, lista de termos sensíveis extraídos do processo (`termos_conhecidos`) e mapa de reaproveitamento de tokens (`mapa_tokens`).
+- **`CofreAnonimizacao`:** Estrutura thread-safe (`threading.Lock`) que mapeia `placeholder -> token_aes_cifrado` (ex.: `"[PESSOA_1]" -> "DJJCE-..."`).
+  - **Zero texto claro em memória do cofre:** Para garantir reutilização consistente quando a mesma entidade aparece múltiplas vezes (na mesma mensagem, em listas de histórico ou em turnos subsequentes da sessão), o cofre calcula um resumo determinístico via **HMAC-SHA256** (`hmac(key, valor_normalizado)`) apenas para deduplicação, armazenando exclusivamente o token cifrado em AES.
+  - **Prefixos amigáveis (`ENTITY_PREFIX_MAP` e `_obter_prefixo_campo`):** Entidades e campos do schema são convertidos em prefixos legíveis para o LLM: `PESSOA`, `ID`, `CPF`, `CNPJ`, `RG`, `TELEFONE`, `EMPRESA`, `PROCESSO_CNJ`, `EMAIL`, `ENTIDADE`, `LOCAL`, `ORGANIZACAO`, `DADO`, entre outros.
+- **`obter_cofre_sessao(session_id: str) -> CofreAnonimizacao`:** Obtém ou inicializa o cofre isolado de uma sessão.
+- **`limpar_cofre_sessao(session_id: str) -> bool`:** Descarta o cofre ao encerrar/excluir a sessão.
+
+### 5.2. `extrair_termos_sensiveis_processo` e Reconhecedor Dinâmico (`SISTEMA_PII`)
+
+- **`extrair_termos_sensiveis_processo(dados)`:** Coleta os nomes e identificadores sensíveis das chaves em `CAMPOS_FONTE_TERMOS_CONHECIDOS` e subobjetos de partes (`CONTEXTOS_PARTE_SENSIVEL`), ignorando `CAMPOS_PRESERVADOS`.
+- **`_criar_reconhecedor_termos_sistema(termos)`:** Injeta um `PatternRecognizer` dinâmico (`ad_hoc_recognizers`) com a entidade `SISTEMA_PII` para garantir que os nomes reais do processo também sejam mascarados quando citados em campos de texto livre ou na mensagem do usuário.
+
+### 5.3. `anonimizar_texto(texto, key=None, termos_conhecidos=None, mapa_tokens=None, session_id=None, cofre=None)`
+
+- **Entrada:** String de texto em texto claro, chave AES opcional, termos sensíveis extraídos do processo (`termos_conhecidos`), mapa auxiliar (`mapa_tokens`) e identificador de sessão/cofre.
 - **Processamento:**
-  1. Restringe a análise exclusivamente a entidades estruturadas/validadas (`ENTIDADES_PADRAO_SISTEMA`: `BR_CPF`, `BR_CNPJ`, `BR_RG`, `PHONE_NUMBER`, `EMAIL_ADDRESS`, `BR_CNJ`, `BR_RAZAO_SOCIAL`), desativando o NER aberto do spaCy (`PERSON`, `LOCATION`, `NRP`, `DATE_TIME`) para eliminar falsos positivos em siglas como `"LGPD"`, `"SAJ"`, `"TJSP"`.
-  2. Quando `termos_conhecidos` é fornecido, injeta um `PatternRecognizer` dinâmico (`ad_hoc_recognizers`) com os nomes reais e identificadores extraídos do processo (`SISTEMA_PII`).
-  3. Executa `anonymizer.anonymize()` utilizando `_cifrar_com_mapa`, garantindo que ocorrências repetidas do mesmo dado recebam o mesmo token cifrado dentro da sessão.
-- **Saída:** Tupla com o texto cifrado e a lista de dicionários contendo metadados de cada entidade cifrada (`start`, `end`, `entity_type`, `text`, `operator`).
+  1. Verifica se o texto já é um placeholder registrado (`_is_placeholder`) ou um token AES válido (`_is_encrypted_token`) para evitar dupla cifragem.
+  2. Restringe a análise exclusivamente a entidades estruturadas/validadas (`ENTIDADES_PADRAO_SISTEMA`: `BR_CPF`, `BR_CNPJ`, `BR_RG`, `PHONE_NUMBER`, `EMAIL_ADDRESS`, `BR_CNJ`, `BR_RAZAO_SOCIAL`), desativando o NER aberto do spaCy (`PERSON`, `LOCATION`, `NRP`, `DATE_TIME`) para eliminar falsos positivos em siglas como `"LGPD"`, `"SAJ"` e `"TJSP"`, e injeta `SISTEMA_PII` quando `termos_conhecidos` é fornecido.
+  3. Filtra termos na deny-list (`IGNORAR_ENTIDADES`), executa `anonymizer.anonymize()` com `OperatorConfig("encrypt", {"key": encryption_key})` e ordena os itens da esquerda para a direita.
+  4. Registra cada token cifrado no `CofreAnonimizacao` ativo e substitui o Base64 longo pelo placeholder curto correspondente (`[PESSOA_1]`, `[CPF_1]`, etc.).
+- **Saída:** Tupla com o texto contendo placeholders curtos e a lista de metadados (`start`, `end`, `entity_type`, `text`, `operator`: `"placeholder_aes"`).
 
-### 5.2. `anonimizar_dados_processo(dados: dict[str, Any] | None, key: str | None = None, mapa_tokens: dict[str, str] | None = None) -> dict[str, Any] | None`
+### 5.4. `anonimizar_dados_processo(dados, key=None, mapa_tokens=None, session_id=None, cofre=None) -> dict[str, Any] | None`
 
-- **Entrada:** Dicionário com informações contextuais do processo no schema do SGPJ (payload `dados_processo`).
-- **Processamento guiado pelo Schema (Key-Aware):**
-  - **Cifrados integralmente (`CAMPOS_CIFRAR_DIRETO`):** `clientNomeRazaoSocial`, `clienteId`, `usuarioResponsavelNome`, `usuarioResponsavelId`, `numeroCnj` e campos de autoria em `historicoProcessoResponses`.
-  - **Analisados como texto livre (`CAMPOS_TEXTO_LIVRE`):** `descricaoCaso`, `obervacao` (`observacao`) e `ultimoMovimento` — aplica `anonimizar_texto()` com os padrões determinísticos e os nomes das partes extraídos do próprio processo.
+- **Entrada:** Dicionário com informações contextuais do processo no schema do SGPJ (payload `dados_processo`) e contexto de sessão opcional.
+- **Processamento guiado pelo Schema (Key-Aware) + Cofre:**
+  - **Cifrados integralmente via `_cifrar_com_cofre` (`CAMPOS_CIFRAR_DIRETO` e `CONTEXTOS_PARTE_SENSIVEL`):** `clientNomeRazaoSocial`, `clienteId`, `usuarioResponsavelNome`, `usuarioResponsavelId`, `numeroCnj` e campos de autoria em `historicoProcessoResponses` recebem cifragem AES no cofre e viram placeholders curtos (`[PESSOA_1]`, `[ID_1]`, `[PROCESSO_CNJ_1]`).
+  - **Analisados como texto livre (`CAMPOS_TEXTO_LIVRE` e demais strings):** `descricaoCaso`, `obervacao` (`observacao`) e `ultimoMovimento` passam por `anonimizar_texto()` com `ENTIDADES_PADRAO_SISTEMA` e os nomes das partes extraídos do próprio processo, reutilizando exatamente os mesmos placeholders do cofre.
   - **Preservados em texto claro (`CAMPOS_PRESERVADOS`):** `valorCausa`, `prioridade`, `faseProcesso`, `status`, `dataAudiencia`, `dataHoraInicio`, `ultimaAtualizacao`, `siglaTribunal`, `tribunalTramitacao`, `instancia`, `dataAjuizamento`, `nivelSigilo`, `classeProcessual`, `formato`, `sistemaTribunal`, `orgaoJulgador`, `assunto` e datas/tipos de atualização em `historicoProcessoResponses`.
-- **Saída:** Novo dicionário idêntico na sua hierarquia, com apenas os dados sensíveis das partes e do processo cifrados e todos os metadados processuais intactos para o LLM.
+- **Saída:** Novo dicionário idêntico na sua hierarquia, com apenas os dados sensíveis protegidos por placeholders consistentes e os metadados processuais intactos para o LLM.
 
-### 5.3. `desanonimizar_texto(texto: str, key: str | None = None) -> str`
+### 5.5. `desanonimizar_texto(texto, key=None, session_id=None, cofre=None) -> str`
 
-- **Entrada:** Resposta gerada pelo LLM contendo potencialmente tokens cifrados.
+- **Entrada:** Resposta gerada pelo LLM contendo placeholders `[TIPO_N]` (ou tokens AES diretos).
 - **Processamento:**
-  1. Localiza candidatos a tokens cifrados através da expressão regular:
-     ```python
-     ENCRYPTED_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43,}={0,2}")
-     ```
-  2. Para cada candidato, testa preliminarmente com `AESCipher.decrypt(key, token)`. Se o token for decifrável pela chave do sistema, cria um objeto `OperatorResult(start, end, entity_type="ENCRYPTED_PII")`.
-  3. Passa a lista de entidades e o texto para `deanonymizer.deanonymize()` com o operador `decrypt` e a chave simétrica.
+  1. **Restauração de Placeholders:** Localiza candidatos com `PLACEHOLDER_PATTERN` (`r"\[[A-Z][A-Z0-9_]*_\d+\]"`), consulta o token AES correspondente no cofre da sessão e o decifra com `AESCipher.decrypt`. Placeholders desconhecidos são mantidos intactos.
+  2. **Fallback para Tokens AES Diretos:** Em seguida, busca eventuais tokens AES-CBC diretos com `ENCRYPTED_TOKEN_PATTERN` (`r"[A-Za-z0-9_-]{43,}={0,2}"`), tratando também casos envolvidos em itálico Markdown (`_TOKEN_`) e restaurando-os via `DeanonymizeEngine`. Candidatos com sufixo `=` que falharem na decifragem registram `logger.warning` para observabilidade.
 - **Saída:** String com todos os dados sensíveis restaurados na sua forma original em texto legível.
 
 ---
 
-## 6. Integração no `agent_service.py`
+## 6. Integração no `agent_service.py` e `prompts.py`
 
-Arquivo: [`src/app/services/agent_service.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/src/app/services/agent_service.py)
+Arquivos: [`src/app/services/agent_service.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/src/app/services/agent_service.py) e [`src/app/agent/prompts.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/src/app/agent/prompts.py)
 
-A orquestração do pipeline de chat conecta a anonimização e desanonimização através de duas funções principais:
+A orquestração do pipeline de chat conecta a anonimização por sessão e a desanonimização através das funções abaixo:
 
-### 6.1. `transformarDadosProcessoIn(dadosProcesso: dict[str, Any] | None) -> dict[str, Any] | None`
+### 6.1. `transformarMensagemIn` e `transformarDadosProcessoIn`
 
 ```python
-def transformarDadosProcessoIn(dadosProcesso: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Anonimiza os dados sensíveis do processo antes do envio ao agente/LLM."""
-    if dadosProcesso is None:
-        return None
+def transformarMensagemIn(
+    mensagem: str,
+    dadosProcesso: dict[str, Any] | None = None,
+    termosConhecidos: Sequence[str] | None = None,
+    mapaTokens: dict[str, str] | None = None,
+    idSessao: str | None = None,
+) -> str:
+    """Anonimiza os dados sensíveis do texto enviado pelo usuário antes do envio ao agente/LLM."""
+    ...
 
-    return anonimizar_dados_processo(dadosProcesso)
+def transformarDadosProcessoIn(
+    dadosProcesso: dict[str, Any] | None,
+    mapaTokens: dict[str, str] | None = None,
+    idSessao: str | None = None,
+) -> dict[str, Any] | None:
+    """Anonimiza os dados sensíveis do processo antes do envio ao agente/LLM."""
+    ...
 ```
 
-- **Momento de Execução:** Executada imediatamente antes de `agent.ainvoke()`.
-- **Efeito:** Garante que o estado do grafo (`dados_processo` em `AgentState`) e as mensagens injetadas no prompt pelo `build_message()` contenham exclusivamente valores cifrados.
+- **Momento de Execução:** Executadas em `executarPipelineAgente()` imediatamente antes de `agent.ainvoke()`, compartilhando o mesmo `idSessao`, o cache `_sessao_termos_conhecidos` e o `CofreAnonimizacao` da sessão.
+- **Efeito:** Garante que a mensagem do usuário e o estado `dados_processo` enviados ao LLM contenham exclusivamente placeholders curtos e consistentes entre turnos, preservando siglas jurídicas e metadados do processo, enquanto o `CofreAnonimizacao` da sessão guarda apenas os valores cifrados em AES.
+- **Orientação no Prompt:** A seção `4.1. DADOS CRIPTOGRAFADOS` do `SYSTEM_PROMPT` instrui o modelo a reproduzir os placeholders `[TIPO_N]` exatamente como aparecem (sem envolver em `{}` e sem alterar caracteres).
 
-### 6.2. `transformarDadosProcessoOut(message: Any) -> Any`
+### 6.2. `transformarDadosProcessoOut` e `excluirSessao`
 
 ```python
-def transformarDadosProcessoOut(message: Any) -> Any:
-    """Restaura dados sensíveis criptografados presentes na resposta do agente/LLM."""
+def transformarDadosProcessoOut(message: Any, idSessao: str | None = None) -> Any:
+    """Restaura dados sensíveis presentes na resposta do agente/LLM."""
     if not isinstance(message, str):
         return message
 
-    return desanonimizar_texto(message)
+    return desanonimizar_texto(message, session_id=idSessao)
 ```
 
-- **Momento de Execução:** Executada logo após extrair o conteúdo textual da última mensagem retornada pelo modelo (`mensagens[-1].content`).
-- **Efeito:** Restaura os dados reais para compor o `ChatResponse` final que será enviado ao cliente da API.
+- **Momento de Execução:** `transformarDadosProcessoOut()` é executada logo após extrair o conteúdo textual da última mensagem retornada pelo modelo (`mensagens[-1].content`), utilizando o cofre da sessão `idSessao`.
+- **Limpeza de Sessão:** Ao chamar `excluirSessao(idSessao)` (via `DELETE /api/v1/chat/{session_id}` ou `/limpar` no `run_local.py`), além de remover a thread no `InMemorySaver`, o sistema limpa `_sessao_termos_conhecidos`, `_sessao_mapa_tokens` e invoca `limpar_cofre_sessao(idSessao)` para descartar o cofre criptográfico da sessão.
 
 ---
 
@@ -297,7 +324,7 @@ class Settings(BaseSettings):
 
 ## 8. Verificação e Testes Unitários
 
-A integridade de todas as rotinas é validada através do arquivo de testes [`tests/test_anonymizer.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/tests/test_anonymizer.py):
+A integridade de todas as rotinas é validada através dos arquivos [`tests/test_anonymizer.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/tests/test_anonymizer.py) e [`tests/test_service.py`](file:///C:/Users/leona/OneDrive/Área%20de%20Trabalho/Agent-Backend/tests/test_service.py):
 
 | Teste | O que valida |
 | :--- | :--- |
@@ -308,8 +335,13 @@ A integridade de todas as rotinas é validada através do arquivo de testes [`te
 | `test_reconhecedor_razao_social` | Detecção de nomes empresariais com sufixos `Ltda.` e `S.A.`. |
 | `test_reconhecedor_cnj` | Detecção e validação matemática por Módulo 97 de processos judiciais. |
 | `test_anonimizacao_reversivel_e_desanonimizacao_texto` | Garante que `desanonimizar(anonimizar(texto)) == texto`. |
-| `test_anonimizar_dados_processo_dicionario` | Travessia de dicionários aninhados preservando campos booleanos e numéricos e cifrando apenas strings. |
+| `test_anonimizar_dados_processo_dicionario` | Travessia de dicionários preservando campos numéricos/booleanos e mascarando dados pessoais/documentos. |
+| `test_schema_sgpj_anonimiza_apenas_campos_sensiveis_e_preserva_metadados` | Valida proteção seletiva por schema SGPJ, preservação de siglas (`LGPD`, `SAJ`, `TJSP`) e restauração na mensagem do usuário. |
 | `test_transformar_dados_processo_in_e_out` | Fluxo completo de ponta a ponta simulando a resposta do LLM e a restauração. |
+| `test_nao_censura_siglas_juridicas_lgpd_nem_comandos_do_usuario` | Garante que siglas jurídicas (`LGPD`, `CNJ`, `SAJ`, `TJSP`) e comandos usuais não sejam censurados. |
+| `test_placeholders_curtos_e_reutilizacao_na_mesma_sessao` | Geração de placeholders curtos (`[TIPO_N]`), reutilização determinística em listas repetidas, armazenamento apenas cifrado no cofre e limpeza da sessão. |
+| `test_isolamento_entre_sessoes_e_fallback_aes_direto` | Isolamento completo entre sessões diferentes e compatibilidade retroativa com tokens AES-CBC diretos (incluindo itálico Markdown). |
+| `test_pipeline_reutiliza_placeholder_entre_turnos_e_limpa_ao_excluir_sessao` | Reutilização de placeholders entre `dados_processo` e turnos seguintes da mesma sessão e limpeza automática via `excluirSessao()`. |
 
 ### Como Executar os Testes:
 

@@ -159,6 +159,49 @@ class ServiceTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    @patch("src.app.services.agent_service.agent")
+    def test_pipeline_reutiliza_placeholder_entre_turnos_e_limpa_ao_excluir_sessao(self, mock_agent):
+        from src.app.services.agent_service import excluirSessao, executarPipelineAgente
+        from src.app.services.anonymizer import limpar_cofre_sessao
+
+        sessao = "test-multi-turn-vault"
+        limpar_cofre_sessao(sessao)
+
+        async def _fake_ainvoke(input_data, config):
+            human_msg = input_data["messages"][0].content
+            return {
+                "messages": [AIMessage(content=f"Confirmado: {human_msg}")],
+                "dados_processo": input_data.get("dados_processo"),
+                "llm_calls": 1,
+            }
+
+        mock_agent.ainvoke = AsyncMock(side_effect=_fake_ainvoke)
+
+        async def _run():
+            r1 = await executarPipelineAgente(
+                mensagem="Consultar processo",
+                idSessao=sessao,
+                dadosProcesso={"cpf": "347.144.900-01"},
+            )
+            placeholder_proc = r1["debug_info"]["dados_processo_anonimizado"]["cpf"]
+            self.assertEqual(placeholder_proc, "[CPF_1]")
+            self.assertIn("[CPF_1]", r1["debug_info"]["mapa_anonimizacao"])
+
+            # Turno 2 cita o mesmo CPF na mensagem e recebe o mesmo placeholder
+            r2 = await executarPipelineAgente(
+                mensagem="O CPF é 347.144.900-01",
+                idSessao=sessao,
+            )
+            self.assertIn("[CPF_1]", r2["debug_info"]["mensagem_anonimizada"])
+            self.assertIn("347.144.900-01", r2["resposta"])
+
+            from src.app.services.anonymizer import obter_cofre_sessao
+            excluirSessao(sessao)
+            self.assertEqual(obter_cofre_sessao(sessao).exportar_mapa(), {})
+
+        asyncio.run(_run())
+        limpar_cofre_sessao(sessao)
+
 
 if __name__ == "__main__":
     unittest.main()

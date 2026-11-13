@@ -167,7 +167,13 @@ class AnonymizerTests(unittest.TestCase):
         mapa_tokens: dict[str, str] = {}
         anonimizado = transformarDadosProcessoIn(dados_sgpj, mapaTokens=mapa_tokens)
 
-        # 1. Identificação, Partes e CNJ foram cifrados
+        # 1. Identificação, Partes e CNJ foram mascarados com placeholders curtos
+        from src.app.services.anonymizer import PLACEHOLDER_PATTERN
+        self.assertRegex(anonimizado["usuarioResponsavelId"], PLACEHOLDER_PATTERN)
+        self.assertRegex(anonimizado["usuarioResponsavelNome"], PLACEHOLDER_PATTERN)
+        self.assertRegex(anonimizado["clienteId"], PLACEHOLDER_PATTERN)
+        self.assertRegex(anonimizado["clientNomeRazaoSocial"], PLACEHOLDER_PATTERN)
+        self.assertRegex(anonimizado["numeroCnj"], PLACEHOLDER_PATTERN)
         self.assertNotEqual(anonimizado["usuarioResponsavelId"], "usr-101")
         self.assertNotEqual(anonimizado["usuarioResponsavelNome"], "Dra. Fernanda Lima")
         self.assertNotEqual(anonimizado["clienteId"], "cli-502")
@@ -302,6 +308,77 @@ class AnonymizerTests(unittest.TestCase):
         self.assertTrue(anonimizado_misto.startswith("Retorne os dados de LGPD do CPF "))
         self.assertNotIn("347.144.900-01", anonimizado_misto)
         self.assertTrue(anonimizado_misto.endswith(", por favor."))
+
+    def test_placeholders_curtos_e_reutilizacao_na_mesma_sessao(self):
+        from src.app.services.anonymizer import (
+            PLACEHOLDER_PATTERN,
+            limpar_cofre_sessao,
+            obter_cofre_sessao,
+        )
+
+        sessao = "sessao-historico-teste"
+        limpar_cofre_sessao(sessao)
+
+        historico = {
+            "alteracoes": [
+                {"responsavel": "John Doe", "descricao": "Processo criado."},
+                {"responsavel": "Jane Smith", "descricao": "Observações atualizadas."},
+                {"responsavel": "John Doe", "descricao": "Adiciona valor da causa."},
+            ]
+        }
+
+        anonimizado = anonimizar_dados_processo(historico, session_id=sessao)
+        r0 = anonimizado["alteracoes"][0]["responsavel"]
+        r1 = anonimizado["alteracoes"][1]["responsavel"]
+        r2 = anonimizado["alteracoes"][2]["responsavel"]
+
+        self.assertRegex(r0, PLACEHOLDER_PATTERN)
+        self.assertRegex(r1, PLACEHOLDER_PATTERN)
+        # Mesmo responsável recebe o mesmo placeholder curto; diferente recebe outro
+        self.assertEqual(r0, r2)
+        self.assertNotEqual(r0, r1)
+
+        # Cofre armazena apenas valores cifrados em AES, nunca texto claro
+        mapa = obter_cofre_sessao(sessao).exportar_mapa()
+        self.assertIn(r0, mapa)
+        self.assertNotEqual(mapa[r0], "John Doe")
+        self.assertNotIn("John Doe", str(mapa))
+
+        resposta_llm = f"Alterações de {r0} e {r1}, finalizadas por {r2}."
+        restaurado = desanonimizar_texto(resposta_llm, session_id=sessao)
+        self.assertEqual(
+            restaurado,
+            "Alterações de John Doe e Jane Smith, finalizadas por John Doe.",
+        )
+
+        self.assertTrue(limpar_cofre_sessao(sessao))
+        # Após limpar o cofre, placeholders não são mais restaurados
+        self.assertEqual(desanonimizar_texto(r0, session_id=sessao), r0)
+
+    def test_isolamento_entre_sessoes_e_fallback_aes_direto(self):
+        from presidio_anonymizer.operators.aes_cipher import AESCipher
+        from src.app.config.settings import settings
+        from src.app.services.anonymizer import limpar_cofre_sessao
+
+        s1, s2 = "sessao-iso-1", "sessao-iso-2"
+        limpar_cofre_sessao(s1)
+        limpar_cofre_sessao(s2)
+
+        t1, _ = anonimizar_texto("CPF 347.144.900-01", session_id=s1)
+        t2, _ = anonimizar_texto("CPF 529.982.247-25", session_id=s2)
+
+        # Ambas iniciam em [CPF_1], mas cada sessão restaura apenas o próprio dado
+        self.assertEqual(t1, "CPF [CPF_1]")
+        self.assertEqual(t2, "CPF [CPF_1]")
+        self.assertEqual(desanonimizar_texto(t1, session_id=s1), "CPF 347.144.900-01")
+        self.assertEqual(desanonimizar_texto(t2, session_id=s2), "CPF 529.982.247-25")
+
+        # Fallback legado: token AES direto (inclusive envolvido em _..._ Markdown)
+        aes_direto = AESCipher.encrypt(settings.anonymization_key.encode("utf-8"), "347.144.900-01")
+        self.assertEqual(desanonimizar_texto(f"CPF _{aes_direto}_", session_id=s1), "CPF _347.144.900-01_")
+
+        limpar_cofre_sessao(s1)
+        limpar_cofre_sessao(s2)
 
 
 if __name__ == "__main__":

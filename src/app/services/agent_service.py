@@ -11,6 +11,8 @@ from src.app.services.anonymizer import (
     anonimizar_texto,
     desanonimizar_texto,
     extrair_termos_sensiveis_processo,
+    limpar_cofre_sessao,
+    obter_cofre_sessao,
 )
 
 agent = criarAgente()
@@ -59,7 +61,11 @@ async def executarPipelineAgente(
         for termo in termos_atuais:
             if termo not in termos_sessao:
                 termos_sessao.append(termo)
-        processo = transformarDadosProcessoIn(dadosProcesso, mapaTokens=mapa_tokens)
+        processo = transformarDadosProcessoIn(
+            dadosProcesso,
+            mapaTokens=mapa_tokens,
+            idSessao=idSessao,
+        )
     else:
         processo = None
         termos_sessao = _sessao_termos_conhecidos.get(idSessao, [])
@@ -69,6 +75,7 @@ async def executarPipelineAgente(
         dadosProcesso=dadosProcesso,
         termosConhecidos=termos_sessao,
         mapaTokens=mapa_tokens,
+        idSessao=idSessao,
     )
 
     estado_inicial: dict[str, Any] = {
@@ -89,7 +96,7 @@ async def executarPipelineAgente(
 
     message = conteudoParaTexto(mensagens[-1].content)
 
-    resposta = transformarDadosProcessoOut(message)
+    resposta = transformarDadosProcessoOut(message, idSessao=idSessao)
 
     if not resposta:
         raise RuntimeError("O assistente retornou uma resposta sem texto")
@@ -105,6 +112,7 @@ async def executarPipelineAgente(
             "mensagem_anonimizada": mensagemAnonimizada,
             "dados_processo_original": dadosProcesso,
             "dados_processo_anonimizado": processo or agent_response.get("dados_processo"),
+            "mapa_anonimizacao": obter_cofre_sessao(idSessao).exportar_mapa(),
             "retorno_modelo": message,
             "pos_desanonimizacao": resposta,
             "llm_calls": agent_response.get("llm_calls", 1),
@@ -118,6 +126,7 @@ def transformarMensagemIn(
     dadosProcesso: dict[str, Any] | None = None,
     termosConhecidos: Sequence[str] | None = None,
     mapaTokens: dict[str, str] | None = None,
+    idSessao: str | None = None,
 ) -> str:
     """
     Anonimiza os dados sensíveis do texto enviado pelo usuário antes do envio ao agente/LLM.
@@ -137,6 +146,7 @@ def transformarMensagemIn(
         mensagem,
         termos_conhecidos=termos or None,
         mapa_tokens=mapaTokens,
+        session_id=idSessao,
     )
     return texto_anonimizado
 
@@ -144,20 +154,25 @@ def transformarMensagemIn(
 def transformarDadosProcessoIn(
     dadosProcesso: dict[str, Any] | None,
     mapaTokens: dict[str, str] | None = None,
+    idSessao: str | None = None,
 ) -> dict[str, Any] | None:
     """Anonimiza os dados sensíveis do processo antes do envio ao agente/LLM."""
     if dadosProcesso is None:
         return None
 
-    return anonimizar_dados_processo(dadosProcesso, mapa_tokens=mapaTokens)
+    return anonimizar_dados_processo(
+        dadosProcesso,
+        mapa_tokens=mapaTokens,
+        session_id=idSessao,
+    )
 
 
-def transformarDadosProcessoOut(message: Any) -> Any:
-    """Restaura dados sensíveis criptografados presentes na resposta do agente/LLM."""
+def transformarDadosProcessoOut(message: Any, idSessao: str | None = None) -> Any:
+    """Restaura dados sensíveis presentes na resposta do agente/LLM."""
     if not isinstance(message, str):
         return message
 
-    return desanonimizar_texto(message)
+    return desanonimizar_texto(message, session_id=idSessao)
 
 
 def conteudoParaTexto(conteudo: Any) -> str:
@@ -181,6 +196,7 @@ def conteudoParaTexto(conteudo: Any) -> str:
 def excluirSessao(idSessao: str) -> bool:
     _sessao_termos_conhecidos.pop(idSessao, None)
     _sessao_mapa_tokens.pop(idSessao, None)
+    limpar_cofre_sessao(idSessao)
     return delete_thread(idSessao)
 
 
