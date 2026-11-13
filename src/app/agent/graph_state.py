@@ -17,6 +17,14 @@ def _atualizar_dados_processo(
 
 
 
+def _atualizar_timezone(
+        antigo: str | None,
+        novo: str | None,
+        ) -> str | None:
+    """Preserva o fuso horário da sessão caso não seja reenviado no turno atual."""
+    return novo if novo is not None else antigo
+
+
 class AgentState(TypedDict, total=False):
     """
     Estado compartilhado do grafo do agente (MarIA).
@@ -25,10 +33,12 @@ class AgentState(TypedDict, total=False):
         messages: Histórico acumulado de mensagens da conversa (HumanMessage, AIMessage, ToolMessage),
                   gerenciado via add_messages do LangGraph.
         dados_processo: Informações contextuais do processo jurídico (partes, números, prioridade, etc.).
+        timezone: Fuso horário IANA do usuário (ex: America/Sao_Paulo) para referência de data/hora.
         llm_calls: Contador de invocações realizadas ao modelo durante a execução.
     """
     messages: Annotated[list[BaseMessage], add_messages]
     dados_processo: Annotated[dict[str, Any] | None, _atualizar_dados_processo]
+    timezone: Annotated[str | None, _atualizar_timezone]
     llm_calls: int
     
 
@@ -36,4 +46,4 @@ class AgentState(TypedDict, total=False):
 # Alias para retrocompatibilidade com referências a MessagesState
 MessagesState = AgentState
 
-__all__ = ["AgentState", "MessagesState", "_atualizar_dados_processo"]
+__all__ = ["AgentState", "MessagesState", "_atualizar_dados_processo", "_atualizar_timezone"]

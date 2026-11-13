@@ -1,10 +1,11 @@
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from langchain.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from src.app.agent.agent import criarAgente
 from src.app.agent.memory import delete_thread
+from src.app.agent.tools import compilar_anexo_ics
 from src.app.services.anonymizer import (
     anonimizar_dados_processo,
     anonimizar_texto,
@@ -30,10 +31,32 @@ _sessao_termos_conhecidos: dict[str, list[str]] = {}
 _sessao_mapa_tokens: dict[str, dict[str, str]] = {}
 
 
+def _extrair_anexos_ics_turno(mensagens: Sequence[Any]) -> list[dict[str, str]]:
+    """
+    Extrai e compila anexos .ics apenas das ToolMessages geradas após a última HumanMessage
+    (evita reenviar arquivos de turnos anteriores armazenados no checkpointer).
+    """
+    indice_inicio = 0
+    for idx in range(len(mensagens) - 1, -1, -1):
+        if isinstance(mensagens[idx], HumanMessage) or getattr(mensagens[idx], "type", None) == "human":
+            indice_inicio = idx + 1
+            break
+
+    anexos: list[dict[str, str]] = []
+    for msg in mensagens[indice_inicio:]:
+        eh_tool = isinstance(msg, ToolMessage) or getattr(msg, "type", None) == "tool"
+        artifact = getattr(msg, "artifact", None)
+        if eh_tool and isinstance(artifact, Mapping) and artifact.get("data_inicio"):
+            anexos.append(compilar_anexo_ics(dict(artifact)))
+
+    return anexos
+
+
 async def executarPipelineAgente(
     mensagem: str,
     idSessao: str,
     dadosProcesso: dict[str, Any] | None = None,
+    timezone: str | None = None,
 ) -> dict[str, Any]:
     mensagemNormalizada = mensagem.strip()
     if not mensagemNormalizada:
@@ -65,12 +88,16 @@ async def executarPipelineAgente(
     )
 
     async def _invocar(conteudo: str) -> tuple[dict[str, Any], list[Any], str]:
+        estado_inicial: dict[str, Any] = {
+            "messages": [HumanMessage(content=conteudo)],
+            "dados_processo": processo,
+        }
+        if timezone:
+            estado_inicial["timezone"] = timezone
+
         resp = await agent.ainvoke(
-            {
-                "messages": [HumanMessage(content=conteudo)],
-                "dados_processo": processo,
-            },
-            {"configurable": {"thread_id": idSessao}, "recursion_limit": 5},
+            estado_inicial,
+            {"configurable": {"thread_id": idSessao}, "recursion_limit": 10},
         )
         msgs = resp.get("messages", [])
         if not msgs:
@@ -106,8 +133,11 @@ async def executarPipelineAgente(
     if not resposta:
         raise RuntimeError("O assistente retornou uma resposta sem texto")
 
+    anexos_ics = _extrair_anexos_ics_turno(mensagens)
+
     return {
         "resposta": resposta,
+        "attachments": anexos_ics,
         "raw_response": agent_response,
         "debug_info": {
             "mensagem_original": mensagemNormalizada,
