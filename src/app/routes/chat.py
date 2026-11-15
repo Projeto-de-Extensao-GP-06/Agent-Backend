@@ -37,6 +37,7 @@ async def enviarMensagem(
             mensagem=requisicao.message,
             idSessao=str(idSessao),
             dadosProcesso=requisicao.dados_processo,
+            dadosDashboard=requisicao.dados_dashboard,
             timezone=requisicao.timezone,
         )
     except ValueError as excecao:
@@ -53,6 +54,7 @@ async def enviarMensagem(
             "response": respostaCompleta["resposta"],
             "session_id": idSessao,
             "attachments": respostaCompleta.get("attachments", []),
+            "charts": respostaCompleta.get("charts", []),
         },
         raw_response=respostaCompleta.get("raw_response"),
     )
