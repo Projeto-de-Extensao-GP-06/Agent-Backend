@@ -48,10 +48,12 @@ def _obter_contexto_data_hora(tz_name: str | None) -> str:
 def build_message(state: AgentState) -> list[BaseMessage]:
     """
     Prepara a lista de mensagens a ser enviada ao modelo,
-    injetando o SYSTEM_PROMPT, a referência temporal e as informações contextuais de 'dados_processo'.
+    injetando o SYSTEM_PROMPT, a referência temporal e as informações contextuais de
+    'dados_processo' e 'dados_dashboard'.
     """
     mensagens = list(state.get("messages", []))
     dados_processo = state.get("dados_processo")
+    dados_dashboard = state.get("dados_dashboard")
     referencia_temporal = _obter_contexto_data_hora(state.get("timezone"))
 
     instrucoes = (
@@ -68,6 +70,22 @@ def build_message(state: AgentState) -> list[BaseMessage]:
             f"\n\n--- DADOS DO PROCESSO ATUAL ---\n"
             f"{dados_formatados}\n"
             f"Utilize esses dados quando o usuário solicitar informações do processo."
+        )
+
+    if dados_dashboard and isinstance(dados_dashboard, dict):
+        periodo_info = dados_dashboard.get("periodo") if isinstance(dados_dashboard.get("periodo"), dict) else {}
+        applied_period = periodo_info.get("appliedPeriod") or dados_dashboard.get("appliedPeriod") or "Mês atual"
+        date_from = periodo_info.get("dateFrom") or dados_dashboard.get("dateFrom") or ""
+        date_to = periodo_info.get("dateTo") or dados_dashboard.get("dateTo") or ""
+        historico = dados_dashboard.get("historico_periodos")
+        periodos_sessao = list(historico.keys()) if isinstance(historico, dict) else []
+        instrucoes += (
+            f"\n\n--- CONTEXTO DA DASHBOARD VINCULADO ---\n"
+            f"Período ativo selecionado pelo usuário: {applied_period} ({date_from} a {date_to}).\n"
+            f"Períodos carregados nesta sessão: {', '.join(periodos_sessao) if periodos_sessao else applied_period}.\n"
+            f"Sempre que precisar consultar os indicadores da Dashboard para responder ao usuário, "
+            f"acione a ferramenta `consultarDadosDashboard`. Quando uma visualização gráfica ajudar "
+            f"a ilustrar seus dados ou análises, acione também `gerarGraficoDashboard`."
         )
 
     # Se a primeira mensagem já for um SystemMessage, atualiza; senão, insere no início

@@ -5,7 +5,7 @@ from langchain_core.messages import HumanMessage, ToolMessage
 
 from src.app.agent.agent import criarAgente
 from src.app.agent.memory import delete_thread
-from src.app.agent.tools import compilar_anexo_ics
+from src.app.agent.tools import compilar_anexo_ics, compilar_grafico_dashboard
 from src.app.services.anonymizer import (
     anonimizar_dados_processo,
     anonimizar_texto,
@@ -52,10 +52,39 @@ def _extrair_anexos_ics_turno(mensagens: Sequence[Any]) -> list[dict[str, str]]:
     return anexos
 
 
+def _extrair_graficos_turno(
+    mensagens: Sequence[Any],
+    session_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Extrai e compila os gráficos gerados apenas nas ToolMessages após a última HumanMessage.
+    """
+    indice_inicio = 0
+    for idx in range(len(mensagens) - 1, -1, -1):
+        if isinstance(mensagens[idx], HumanMessage) or getattr(mensagens[idx], "type", None) == "human":
+            indice_inicio = idx + 1
+            break
+
+    graficos: list[dict[str, Any]] = []
+    for msg in mensagens[indice_inicio:]:
+        eh_tool = isinstance(msg, ToolMessage) or getattr(msg, "type", None) == "tool"
+        artifact = getattr(msg, "artifact", None)
+        if (
+            eh_tool
+            and isinstance(artifact, Mapping)
+            and artifact.get("chart_type")
+            and isinstance(artifact.get("data"), list)
+        ):
+            graficos.append(compilar_grafico_dashboard(dict(artifact), session_id=session_id))
+
+    return graficos
+
+
 async def executarPipelineAgente(
     mensagem: str,
     idSessao: str,
     dadosProcesso: dict[str, Any] | None = None,
+    dadosDashboard: dict[str, Any] | None = None,
     timezone: str | None = None,
 ) -> dict[str, Any]:
     mensagemNormalizada = mensagem.strip()
@@ -79,6 +108,20 @@ async def executarPipelineAgente(
         processo = None
         termos_sessao = _sessao_termos_conhecidos.get(idSessao, [])
 
+    if dadosDashboard is not None:
+        termos_dash = extrair_termos_sensiveis_processo(dadosDashboard)
+        termos_sessao = _sessao_termos_conhecidos.setdefault(idSessao, [])
+        for termo in termos_dash:
+            if termo not in termos_sessao:
+                termos_sessao.append(termo)
+        dashboard = transformarDadosProcessoIn(
+            dadosDashboard,
+            mapaTokens=mapa_tokens,
+            idSessao=idSessao,
+        )
+    else:
+        dashboard = None
+
     mensagemAnonimizada = transformarMensagemIn(
         mensagemNormalizada,
         dadosProcesso=dadosProcesso,
@@ -91,6 +134,7 @@ async def executarPipelineAgente(
         estado_inicial: dict[str, Any] = {
             "messages": [HumanMessage(content=conteudo)],
             "dados_processo": processo,
+            "dados_dashboard": dashboard,
         }
         if timezone:
             estado_inicial["timezone"] = timezone
@@ -134,16 +178,20 @@ async def executarPipelineAgente(
         raise RuntimeError("O assistente retornou uma resposta sem texto")
 
     anexos_ics = _extrair_anexos_ics_turno(mensagens)
+    graficos = _extrair_graficos_turno(mensagens, session_id=idSessao)
 
     return {
         "resposta": resposta,
         "attachments": anexos_ics,
+        "charts": graficos,
         "raw_response": agent_response,
         "debug_info": {
             "mensagem_original": mensagemNormalizada,
             "mensagem_anonimizada": mensagemAnonimizada,
             "dados_processo_original": dadosProcesso,
             "dados_processo_anonimizado": processo or agent_response.get("dados_processo"),
+            "dados_dashboard_original": dadosDashboard,
+            "dados_dashboard_anonimizado": dashboard or agent_response.get("dados_dashboard"),
             "mapa_anonimizacao": obter_cofre_sessao(idSessao).exportar_mapa(),
             "retorno_modelo": message,
             "pos_desanonimizacao": resposta,
